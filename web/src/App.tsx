@@ -3,6 +3,7 @@ import { NavLink, Navigate, Route, Routes } from 'react-router'
 import { api, type Health } from './api'
 import { useTheme, type Theme } from './theme'
 import Placeholder from './pages/Placeholder'
+import PromptPage from './pages/PromptPage'
 
 interface Section {
   path: string
@@ -95,7 +96,8 @@ export default function App() {
       <main className="main">
         <Routes>
           <Route path="/" element={<Navigate to="/prompt" replace />} />
-          {SECTIONS.map((s) => (
+          <Route path="/prompt" element={<PromptPage />} />
+          {SECTIONS.filter((s) => s.path !== '/prompt').map((s) => (
             <Route
               key={s.path}
               path={s.path}

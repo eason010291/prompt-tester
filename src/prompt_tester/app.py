@@ -6,6 +6,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__, db
 from .config import Settings, load_settings
+from .routes import prompt
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -32,6 +33,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "providers": sorted(settings.providers),
         }
 
+    app.include_router(prompt.router)
     _mount_frontend(app, settings)
     return app
 
@@ -50,4 +52,5 @@ def _mount_frontend(app: FastAPI, settings: Settings) -> None:
         file = (dist / path).resolve()
         if path and file.is_file() and file.is_relative_to(dist.resolve()):
             return FileResponse(file)
-        return FileResponse(index)
+        # index.html 引用帶 hash 的資源檔，必須每次重新驗證，否則前端更新後會載入舊版
+        return FileResponse(index, headers={"Cache-Control": "no-cache"})
