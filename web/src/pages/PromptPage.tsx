@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type ChangeEvent } from 'react'
+import { api } from '../api'
 import BlockList from '../components/BlockList'
 import ContextPanel from '../components/ContextPanel'
 import PreviewPane from '../components/PreviewPane'
 import SettingsPanel from '../components/SettingsPanel'
 import { useBuild, useWorkspace, type SaveState } from '../hooks/useWorkspace'
-import type { Block } from '../types'
+import type { Block, ImportResponse } from '../types'
 
 const SAVE_LABEL: Record<SaveState, string> = {
   loading: '載入中…',
@@ -18,6 +19,7 @@ export default function PromptPage() {
   const { ws, saveState, loadError, setPreset, setContext } = useWorkspace()
   const [expandMacros, setExpandMacros] = useState(true)
   const [highlightId, setHighlightId] = useState<string | null>(null)
+  const [importNotes, setImportNotes] = useState<{ title: string; lines: string[] } | null>(null)
   const { result, error, busy } = useBuild(ws?.preset, ws?.context, expandMacros)
 
   const setBlocks = useCallback((blocks: Block[]) => setPreset((p) => ({ ...p, blocks })), [setPreset])
@@ -39,6 +41,35 @@ export default function PromptPage() {
     return () => window.clearTimeout(t)
   }, [highlightId])
 
+  const onImportFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    try {
+      const data = JSON.parse(await file.text())
+      const res = await api<ImportResponse>('/import/st-preset', {
+        method: 'POST',
+        body: JSON.stringify({ data, filename: file.name }),
+      })
+      if (!window.confirm(`以「${res.preset.name}」（${res.preset.blocks.length} 個區塊）取代目前的預設？`)) return
+      setPreset(() => res.preset)
+      setImportNotes({ title: `已匯入「${res.preset.name}」`, lines: res.notes })
+    } catch (err) {
+      setImportNotes({ title: '匯入失敗', lines: [err instanceof Error ? err.message : String(err)] })
+    }
+  }
+
+  const onExport = async () => {
+    if (!ws) return
+    const data = await api<object>('/export/st-preset', { method: 'POST', body: JSON.stringify(ws.preset) })
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 4)], { type: 'application/json' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${ws.preset.name || 'preset'}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   if (loadError) return <p className="alert alert-error">無法載入工作區：{loadError}</p>
   if (!ws) return <p className="muted">載入中…</p>
 
@@ -56,7 +87,29 @@ export default function PromptPage() {
             onChange={(e) => setPreset((p) => ({ ...p, name: e.target.value }))}
           />
           <span className={`save-state save-${saveState}`}>{SAVE_LABEL[saveState]}</span>
+          <div className="header-actions">
+            <label className="btn btn-sm" title="匯入 SillyTavern Chat Completion 預設（.json）">
+              匯入 ST 預設
+              <input type="file" accept=".json,application/json" hidden onChange={onImportFile} />
+            </label>
+            <button className="btn btn-sm" onClick={onExport} title="匯出成 SillyTavern 可匯入的 JSON">
+              匯出 ST JSON
+            </button>
+          </div>
         </header>
+        {importNotes && (
+          <div className="alert notes" role="status">
+            <strong>{importNotes.title}</strong>
+            <ul>
+              {importNotes.lines.map((n) => (
+                <li key={n}>{n}</li>
+              ))}
+            </ul>
+            <button className="icon-btn" aria-label="關閉" onClick={() => setImportNotes(null)}>
+              ✕
+            </button>
+          </div>
+        )}
         <p className="muted small">
           {preset.blocks.length} 個區塊，{enabled} 個內容區塊啟用 · 拖曳 ⠿ 排序；變體群組相同的區塊只會有一個啟用
         </p>

@@ -3,9 +3,10 @@
 import sqlite3
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from .. import st_preset
 from ..build import build
 from ..macros import SUPPORTED_MACROS
 from ..preset import Preset, PreviewContext, starter_context, starter_preset
@@ -118,3 +119,28 @@ def build_preview(req: BuildRequest) -> BuildResponse:
 @router.get("/macros")
 def list_macros() -> list[str]:
     return SUPPORTED_MACROS
+
+
+class ImportRequest(BaseModel):
+    data: dict
+    filename: str = ""
+
+
+class ImportResponse(BaseModel):
+    preset: Preset
+    notes: list[str]
+
+
+@router.post("/import/st-preset")
+def import_st(req: ImportRequest) -> ImportResponse:
+    name = req.filename.rsplit(".", 1)[0] if req.filename else ""
+    try:
+        preset, notes = st_preset.import_preset(req.data, name)
+    except st_preset.PresetFormatError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return ImportResponse(preset=preset, notes=notes)
+
+
+@router.post("/export/st-preset")
+def export_st(preset: Preset) -> dict:
+    return st_preset.export_preset(preset)

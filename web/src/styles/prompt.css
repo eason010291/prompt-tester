@@ -96,6 +96,31 @@ textarea:focus {
   color: var(--accent);
 }
 
+.chip-warn {
+  color: var(--error);
+}
+
+.header-actions {
+  display: flex;
+  gap: var(--s-xs);
+}
+
+.notes {
+  position: relative;
+  padding-right: 32px;
+}
+
+.notes ul {
+  margin: 4px 0 0;
+  padding-left: 1.2em;
+}
+
+.notes .icon-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+}
+
 .chip-source {
   cursor: pointer;
 }
@@ -640,6 +665,18 @@ textarea:focus {
   font-family: var(--font-sans);
   font-size: 13px;
   line-height: 1.6;
+}
+
+.msg-content.clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 10;
+  line-clamp: 10;
+  overflow: hidden;
+}
+
+.msg-toggle {
+  margin-top: 4px;
 }
 
 .json-view {

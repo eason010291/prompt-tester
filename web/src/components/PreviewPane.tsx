@@ -10,6 +10,10 @@ interface Props {
   onSourceClick: (blockId: string) => void
 }
 
+const LONG_LINES = 10
+const LONG_CHARS = 600
+const isLong = (s: string) => s.length > LONG_CHARS || s.split('\n').length > LONG_LINES
+
 const ORIGIN_LABEL = {
   history: '歷史',
   injection: '注入',
@@ -21,6 +25,14 @@ const ORIGIN_LABEL = {
 export default function PreviewPane({ result, error, busy, expandMacros, onExpandMacros, onSourceClick }: Props) {
   const [view, setView] = useState<'messages' | 'json'>('messages')
   const [copied, setCopied] = useState(false)
+  const [expanded, setExpanded] = useState<Set<number>>(new Set())
+  const toggleExpanded = (i: number) =>
+    setExpanded((s) => {
+      const next = new Set(s)
+      if (next.has(i)) next.delete(i)
+      else next.add(i)
+      return next
+    })
 
   const json = result
     ? JSON.stringify(
@@ -108,7 +120,12 @@ export default function PreviewPane({ result, error, busy, expandMacros, onExpan
                 </span>
                 <span className="token-count">{m.tokens} tok</span>
               </div>
-              <pre className="msg-content">{m.content}</pre>
+              <pre className={`msg-content ${isLong(m.content) && !expanded.has(i) ? 'clamped' : ''}`}>{m.content}</pre>
+              {isLong(m.content) && (
+                <button className="btn btn-sm msg-toggle" onClick={() => toggleExpanded(i)}>
+                  {expanded.has(i) ? '收合' : `展開全文（${m.content.length.toLocaleString()} 字）`}
+                </button>
+              )}
             </li>
           ))}
         </ol>

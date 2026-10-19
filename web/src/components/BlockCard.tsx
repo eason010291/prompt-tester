@@ -1,7 +1,19 @@
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { useState } from 'react'
-import { POSITION_IN_CHAT, POSITION_RELATIVE, type Block, type Role } from '../types'
+import { MARKER_LABEL, POSITION_IN_CHAT, POSITION_RELATIVE, type Block, type Role } from '../types'
+
+// ST 只會送出這些 system_prompt 內容區塊（見 build.py ST_SYSTEM_RELATIVE）
+const ST_SYSTEM_RELATIVE = new Set(['main', 'nsfw', 'jailbreak', 'enhanceDefinitions'])
+
+function stNotSent(b: Block): string | null {
+  if (b.kind !== 'content') return null
+  const triggers = (b.st.injection_trigger as string[] | undefined) ?? []
+  if (triggers.length && !triggers.includes('normal')) return `僅在 ${triggers.join('/')} 時送出`
+  if (b.st.system_prompt === true && !ST_SYSTEM_RELATIVE.has(b.id) && b.injection_position !== POSITION_IN_CHAT)
+    return 'ST 不會送出（system_prompt）'
+  return null
+}
 
 interface Props {
   block: Block
@@ -72,6 +84,7 @@ export default function BlockCard(props: Props) {
 
   const isMarker = block.kind === 'marker'
   const inChat = block.injection_position === POSITION_IN_CHAT
+  const notSent = stNotSent(block)
 
   return (
     <article ref={setNodeRef} style={style} className={classes} id={`block-${block.id}`}>
@@ -89,9 +102,16 @@ export default function BlockCard(props: Props) {
           onChange={(e) => onChange({ name: e.target.value })}
         />
         {isMarker ? (
-          <span className="chip chip-marker">聊天歷史插入點</span>
+          block.marker === 'chatHistory' ? (
+            <span className="chip chip-marker">{MARKER_LABEL.chatHistory}</span>
+          ) : (
+            <span className="chip" title="需要角色卡 / 世界書（M7）才有內容，目前組裝為空">
+              {block.marker ? MARKER_LABEL[block.marker] : 'marker'} · 待接角色卡
+            </span>
+          )
         ) : (
           <>
+            {notSent && <span className="chip chip-warn">{notSent}</span>}
             {inChat && <span className="chip chip-inject">深度 {block.injection_depth}</span>}
             {block.group && <span className="chip chip-group">⇄ {block.group}</span>}
             <select
