@@ -19,6 +19,21 @@ from .preset import POSITION_IN_CHAT, Block, HistoryMessage, Preset
 
 MAX_INJECTION_DEPTH = 10000
 ROLE_PRIORITY = ("system", "user", "assistant")
+# ST populateChatCompletion 會送出的 system_prompt 內容區塊；其他 system_prompt: true 的區塊不送（oa:1203-1249）
+ST_SYSTEM_RELATIVE = {"main", "nsfw", "jailbreak", "enhanceDefinitions"}
+GENERATION_TYPE = "normal"
+
+
+def _is_active(b: Block) -> bool:
+    """啟用、是內容區塊，且 injection_trigger 適用於本次生成類型（空 = 全部適用）。"""
+    triggers = b.st.get("injection_trigger") or []
+    return b.kind == "content" and b.enabled and (not triggers or GENERATION_TYPE in triggers)
+
+
+def _sends_relative(b: Block) -> bool:
+    return b.injection_position != POSITION_IN_CHAT and (
+        not b.st.get("system_prompt", False) or b.id in ST_SYSTEM_RELATIVE
+    )
 
 Origin = Literal["block", "history", "injection", "separator", "placeholder"]
 
@@ -95,7 +110,7 @@ def build(
     # 1. 展開區塊（ST getPromptCollection：依 prompt_order 順序，每個區塊一次）
     prepared: dict[str, str] = {}
     for b in preset.blocks:
-        if b.kind == "content" and b.enabled:
+        if _is_active(b):
             prepared[b.id] = expand(b.content)
 
     history_marker = next(
@@ -107,7 +122,7 @@ def build(
     relative = [
         Msg(b.role, prepared[b.id], [Source("block", b.id, b.name)])
         for b in preset.blocks
-        if b.id in prepared and b.injection_position != POSITION_IN_CHAT
+        if b.id in prepared and _sends_relative(b)
     ]
     used = sum(m.tokens for m in relative)
 
@@ -136,7 +151,7 @@ def build(
     for b in preset.blocks:
         if b is history_marker:
             messages.extend(chat_msgs)
-        elif b.id in prepared and b.injection_position != POSITION_IN_CHAT:
+        elif b.id in prepared and _sends_relative(b):
             messages.append(next(rel_iter))
 
     # 5.

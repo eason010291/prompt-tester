@@ -7,11 +7,32 @@ export type PostProcessing = '' | 'merge' | 'semi' | 'strict' | 'single'
 export const POSITION_RELATIVE = 0
 export const POSITION_IN_CHAT = 1
 
+export type Marker =
+  | 'chatHistory'
+  | 'dialogueExamples'
+  | 'worldInfoBefore'
+  | 'worldInfoAfter'
+  | 'charDescription'
+  | 'charPersonality'
+  | 'scenario'
+  | 'personaDescription'
+
+export const MARKER_LABEL: Record<Marker, string> = {
+  chatHistory: '聊天歷史插入點',
+  dialogueExamples: '範例對話',
+  worldInfoBefore: '世界書（前）',
+  worldInfoAfter: '世界書（後）',
+  charDescription: '角色描述',
+  charPersonality: '角色個性',
+  scenario: '情境',
+  personaDescription: 'Persona 描述',
+}
+
 export interface Block {
   id: string
   name: string
   kind: BlockKind
-  marker: 'chatHistory' | null
+  marker: Marker | null
   role: Role
   content: string
   enabled: boolean
@@ -20,6 +41,8 @@ export interface Block {
   injection_order: number
   group: string
   collapsed: boolean
+  /** ST 專屬欄位（system_prompt、injection_trigger…），匯出時寫回 */
+  st: Record<string, unknown>
 }
 
 export interface Params {
@@ -100,6 +123,12 @@ export function newBlock(partial: Partial<Block> = {}): Block {
     injection_order: 100,
     group: '',
     collapsed: false,
+    st: {},
     ...partial,
   }
+}
+
+export interface ImportResponse {
+  preset: Preset
+  notes: string[]
 }

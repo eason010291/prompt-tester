@@ -12,7 +12,17 @@ from pydantic import BaseModel, Field
 
 Role = Literal["system", "user", "assistant"]
 BlockKind = Literal["content", "marker", "divider"]
-Marker = Literal["chatHistory"]
+# ST 內建 marker。M1 只有 chatHistory 有內容來源，其餘在 M7（角色卡 / 世界書）接上前組裝為空。
+Marker = Literal[
+    "chatHistory",
+    "dialogueExamples",
+    "worldInfoBefore",
+    "worldInfoAfter",
+    "charDescription",
+    "charPersonality",
+    "scenario",
+    "personaDescription",
+]
 PostProcessing = Literal["", "merge", "semi", "strict", "single"]
 
 # 對應 ST injection_position：0 = 依列表位置（相對），1 = 依深度插入聊天歷史（In-Chat）
@@ -39,6 +49,8 @@ class Block(BaseModel):
     group: str = ""
     # 前端用：卡片是否摺疊
     collapsed: bool = False
+    # ST 專屬欄位（system_prompt、forbid_overrides、injection_trigger…），匯出時寫回
+    st: dict = Field(default_factory=dict)
 
 
 class Params(BaseModel):
