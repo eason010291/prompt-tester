@@ -14,6 +14,18 @@ MIGRATIONS: list[tuple[int, str]] = [
         );
         """,
     ),
+    (
+        2,
+        # M1：編輯中的預設與預覽情境。M3 起成為分支上的工作區（working copy）。
+        """
+        CREATE TABLE workspaces (
+            id         INTEGER PRIMARY KEY,
+            preset     TEXT NOT NULL,
+            context    TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """,
+    ),
 ]
 
 
