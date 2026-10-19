@@ -1,6 +1,16 @@
 # Prompt Tester
 
-本機執行的提示詞測試器：區塊式組裝 Chat Completion 提示詞 → 依金字塔腳本批次生成 → 人工評語 → LLM 依評語修改 → 與父版本迴歸比較。預設與腳本各有類 git 的版本樹。
+本機執行的提示詞測試器：區塊式組裝 Chat Completion 提示詞 → 依金字塔腳本批次生成 → 人工評語 → LLM 依評語修改 → 與父版本迴歸比較。預設與腳本各有類 git 的版本樹。組裝規則對照 SillyTavern 1.18.0，可直接匯入 / 匯出酒館預設。
+
+## 目前進度
+
+| 里程碑 | 內容 | 狀態 |
+|--------|------|------|
+| M0 | 專案骨架（FastAPI + SQLite + React/Vite） | ✅ |
+| M1 | 區塊組裝、巨集、深度注入、`messages[]` 即時預覽 | ✅ |
+| M7（部分） | SillyTavern Chat Completion 預設匯入 / 匯出 | ✅ |
+| M2 | OpenRouter 連線、情境管理、實際生成 | 下一步 |
+| M3–M6 | 版本樹、金字塔批次、評語迴歸、LLM 修改（內建迴圈 / MCP / REST） | 規劃中 |
 
 ## 需求
 
@@ -44,8 +54,19 @@ cd web && npm run lint && npm run build
 
 | 路徑 | 內容 |
 |------|------|
-| `src/prompt_tester/` | FastAPI 後端 |
+| `src/prompt_tester/preset.py` | 預設資料模型（欄位沿用 ST 命名） |
+| `src/prompt_tester/macros.py` | ST 巨集子集（對照 1.18.0 新巨集引擎） |
+| `src/prompt_tester/build.py` | 組裝器（對照 ST `openai.js` / `prompt-converters.js`） |
+| `src/prompt_tester/st_preset.py` | ST 預設匯入 / 匯出 |
+| `src/prompt_tester/routes/` | API 路由 |
 | `web/` | React + Vite 前端 |
 | `tests/` | 後端測試 |
 | `data/` | SQLite 資料庫（自動建立，不入版控） |
 | `config.local.toml` | 本機設定與 API key（不入版控） |
+| `doc/` | 工作文件（設計、進度；不入版控） |
+
+## 分支
+
+- `main`：穩定版
+- `dev`：開發整合
+- `feature/<里程碑-主題>`：從 `dev` 分出，完成並驗證後合併回 `dev`
