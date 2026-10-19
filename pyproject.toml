@@ -1,0 +1,26 @@
+[project]
+name = "prompt-tester"
+version = "0.1.0"
+description = "提示詞測試器：組裝、批次生成、評語迴歸與 LLM 修改的本機網頁工具"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.146.0",
+    "httpx>=0.28.1",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.scripts]
+prompt-tester = "prompt_tester.__main__:main"
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

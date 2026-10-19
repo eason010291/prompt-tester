@@ -1,0 +1,98 @@
+/*
+ * 設計 token：來源為使用者外觀筆記 DESIGN-claude.md（米白畫布 / 珊瑚強調 / 深色產品面）。
+ * 元件只使用語意變數（--bg、--text…），不直接引用色票。
+ */
+:root {
+  /* 色票 */
+  --coral: #cc785c;
+  --coral-active: #a9583e;
+  --coral-disabled: #e6dfd8;
+  --ink: #141413;
+  --body: #3d3d3a;
+  --body-strong: #252523;
+  --muted: #6c6a64;
+  --muted-soft: #8e8b82;
+  --hairline: #e6dfd8;
+  --hairline-soft: #ebe6df;
+  --canvas: #faf9f5;
+  --surface-soft: #f5f0e8;
+  --surface-card: #efe9de;
+  --surface-cream-strong: #e8e0d2;
+  --surface-dark: #181715;
+  --surface-dark-elevated: #252320;
+  --surface-dark-soft: #1f1e1b;
+  --on-dark: #faf9f5;
+  --on-dark-soft: #a09d96;
+  --teal: #5db8a6;
+  --amber: #e8a55a;
+  --success: #5db872;
+  --warning: #d4a017;
+  --error: #c64545;
+
+  /* 語意（淺色） */
+  --bg: var(--canvas);
+  --bg-soft: var(--surface-soft);
+  --bg-card: #fff;
+  --bg-sunken: var(--surface-card);
+  --text: var(--body);
+  --text-strong: var(--ink);
+  --text-muted: var(--muted);
+  --border: var(--hairline);
+  --border-soft: var(--hairline-soft);
+  --accent: var(--coral);
+  --accent-active: var(--coral-active);
+  --on-accent: #fff;
+  --focus-ring: color-mix(in srgb, var(--coral) 45%, transparent);
+
+  /* 字體：Copernicus / Tiempos / Styrene 非公開字體，退回系統可用的襯線與無襯線中文字體 */
+  --font-display: 'Copernicus', 'Tiempos Headline', 'Noto Serif TC', 'Source Han Serif TC', Georgia, serif;
+  --font-sans: 'StyreneB', Inter, 'Noto Sans TC', 'Microsoft JhengHei', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Mono', Consolas, 'Noto Sans Mono CJK TC', monospace;
+
+  /* 圓角 */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+  --r-pill: 9999px;
+
+  /* 間距 */
+  --s-xxs: 4px;
+  --s-xs: 8px;
+  --s-sm: 12px;
+  --s-md: 16px;
+  --s-lg: 24px;
+  --s-xl: 32px;
+  --s-xxl: 48px;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: var(--surface-dark);
+    --bg-soft: var(--surface-dark-soft);
+    --bg-card: var(--surface-dark-elevated);
+    --bg-sunken: #12110f;
+    --text: #d9d6ce;
+    --text-strong: var(--on-dark);
+    --text-muted: var(--on-dark-soft);
+    --border: #34312c;
+    --border-soft: #2b2925;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --bg: var(--surface-dark);
+  --bg-soft: var(--surface-dark-soft);
+  --bg-card: var(--surface-dark-elevated);
+  --bg-sunken: #12110f;
+  --text: #d9d6ce;
+  --text-strong: var(--on-dark);
+  --text-muted: var(--on-dark-soft);
+  --border: #34312c;
+  --border-soft: #2b2925;
+  color-scheme: dark;
+}

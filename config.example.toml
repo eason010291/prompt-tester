@@ -1,0 +1,10 @@
+# 複製成 config.local.toml 後填入金鑰。config.local.toml 不入版控。
+
+[server]
+host = "127.0.0.1"   # 只綁本機；開放區網前必須先設定存取 token（見 doc/design.md §7.3）
+port = 8000
+data_dir = "data"    # SQLite 資料庫位置，相對於專案根目錄
+
+[providers.openrouter]
+base_url = "https://openrouter.ai/api/v1"
+api_key = ""

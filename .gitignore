@@ -1,0 +1,21 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Working docs (not versioned, see doc/init.md)
+doc/
+
+# Local config & data (API keys, SQLite)
+config.local.toml
+data/
+
+# Frontend
+web/node_modules/
+web/dist/
