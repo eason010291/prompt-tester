@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { api, streamApi } from '../api'
 import { formatCost, useResource } from '../hooks/useResource'
@@ -9,13 +9,27 @@ import type {
   ModelInfo,
   Preset,
   PreviewContext,
+  Scenario,
   StreamEvent,
 } from '../types'
-import Markdown from './Markdown'
+import { collectScriptSets } from '../lib/st/format'
+import { makeMacro, type Applied } from '../lib/st/regex'
+import StMessage, { type StTheme } from './StMessage'
 
 interface Props {
   preset: Preset
   context: PreviewContext
+  scenario: Scenario | null
+}
+
+const THEME_KEY = 'prompt-tester.st-theme'
+
+function readTheme(): StTheme {
+  try {
+    return localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'st-dark'
+  } catch {
+    return 'st-dark'
+  }
 }
 
 interface Live {
@@ -41,13 +55,42 @@ function readStoredConnection(): number | null {
   }
 }
 
-export default function TryRunPanel({ preset, context }: Props) {
+export default function TryRunPanel({ preset, context, scenario }: Props) {
   const connections = useResource<Connection[]>('/connections')
   const history = useResource<GenerationSummary[]>('/generations?limit=15')
   const [connId, setConnId] = useState<number | null>(readStoredConnection)
   const [live, setLive] = useState<Live>(IDLE)
   const [raw, setRaw] = useState(false)
+  const [theme, setTheme] = useState<StTheme>(readTheme)
+  const [useRegex, setUseRegex] = useState({ preset: true, card: true })
+  const [externalMedia, setExternalMedia] = useState(false)
+  const [autoFix, setAutoFix] = useState(false)
+  const [applied, setApplied] = useState<Applied[]>([])
   const abort = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(THEME_KEY, theme)
+    } catch {
+      // 只是不記住主題
+    }
+  }, [theme])
+
+  // 開啟舊紀錄時，以當時的情境快照（角色名、角色正則）渲染
+  const shownScenario = live.generation?.scenario ?? scenario
+  const presetScripts = (preset.extra?.extensions as { regex_scripts?: unknown } | undefined)?.regex_scripts
+  const cardScripts = shownScenario?.card?.regex_scripts
+  const scriptSets = useMemo(
+    () => collectScriptSets(presetScripts, cardScripts, useRegex),
+    [presetScripts, cardScripts, useRegex],
+  )
+  const macro = useMemo(
+    () => makeMacro({ ...(shownScenario?.vars ?? {}), char: shownScenario?.char ?? '', user: shownScenario?.user ?? '' }),
+    [shownScenario],
+  )
+  const onApplied = useCallback((a: Applied[]) => setApplied(a), [])
+  const presetCount = Array.isArray(presetScripts) ? presetScripts.length : 0
+  const cardCount = Array.isArray(cardScripts) ? cardScripts.length : 0
 
   const conn = connections.data?.find((c) => c.id === connId) ?? connections.data?.[0] ?? null
   const models = useResource<ModelInfo[]>(conn ? `/providers/${conn.provider}/models` : null)
@@ -176,6 +219,46 @@ export default function TryRunPanel({ preset, context }: Props) {
         </div>
       </div>
 
+      <div className="render-opts">
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={useRegex.preset}
+            disabled={!presetCount}
+            onChange={(e) => setUseRegex((u) => ({ ...u, preset: e.target.checked }))}
+          />
+          預設正則（{presetCount}）
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={useRegex.card}
+            disabled={!cardCount}
+            onChange={(e) => setUseRegex((u) => ({ ...u, card: e.target.checked }))}
+          />
+          角色正則（{cardCount}）
+        </label>
+        <label className="check" title="ST 預設禁止外部圖片 / 媒體與 CSS 中的外部網址">
+          <input type="checkbox" checked={externalMedia} onChange={(e) => setExternalMedia(e.target.checked)} />
+          允許外部媒體
+        </label>
+        <label
+          className="check"
+          title={'ST「自動修正 Markdown」：補上落單的 * 與 "、移除格式符號旁的空白（全新安裝預設關閉）'}
+        >
+          <input type="checkbox" checked={autoFix} onChange={(e) => setAutoFix(e.target.checked)} />
+          自動修正 Markdown
+        </label>
+        <div className="segmented" role="group" aria-label="渲染主題">
+          <button aria-pressed={theme === 'st-dark'} onClick={() => setTheme('st-dark')}>
+            ST 深色
+          </button>
+          <button aria-pressed={theme === 'light'} onClick={() => setTheme('light')}>
+            淺色
+          </button>
+        </div>
+      </div>
+
       {conn && (
         <p className="muted small conn-line">
           {conn.model}
@@ -191,7 +274,21 @@ export default function TryRunPanel({ preset, context }: Props) {
       {context.user_input && (
         <div className="bubble bubble-user">
           <span className="bubble-role">user</span>
-          <div className="bubble-text">{context.user_input}</div>
+          {raw ? (
+            <div className="bubble-text">{context.user_input}</div>
+          ) : (
+            <StMessage
+              text={context.user_input}
+              theme={theme}
+              isUser
+              depth={1}
+              charName={shownScenario?.char ?? ''}
+              scriptSets={scriptSets}
+              macro={macro}
+              externalMedia={externalMedia}
+              autoFixMarkdown={autoFix}
+            />
+          )}
         </div>
       )}
 
@@ -207,7 +304,28 @@ export default function TryRunPanel({ preset, context }: Props) {
               <pre>{live.reasoning}</pre>
             </details>
           )}
-          {raw ? <pre className="msg-content">{live.output}</pre> : <Markdown text={live.output} className="bubble-text" />}
+          {raw || running ? (
+            <pre className="msg-content">{live.output}</pre>
+          ) : (
+            <StMessage
+              text={live.output}
+              theme={theme}
+              depth={0}
+              charName={shownScenario?.char ?? ''}
+              scriptSets={scriptSets}
+              macro={macro}
+              externalMedia={externalMedia}
+              autoFixMarkdown={autoFix}
+              onApplied={onApplied}
+            />
+          )}
+          {!raw && !running && live.output && (
+            <p className="muted small applied">
+              {applied.length
+                ? '套用的正則：' + applied.map((a) => `${a.name}${a.count > 1 ? ` ×${a.count}` : ''}`).join('、')
+                : '沒有正則命中'}
+            </p>
+          )}
           {running && !live.output && !live.reasoning && <p className="muted small">等待回應…</p>}
           {live.error && <p className="alert alert-error">{live.error}</p>}
           {live.status === 'cancelled' && <p className="muted small">已中止</p>}

@@ -336,6 +336,15 @@ def build(
         ctx.warnings.append("角色卡有範例對話，但預設沒有啟用「範例對話」marker，不會送出。")
     if used > budget:
         ctx.warnings.append(f"區塊本身已超出預算（{used} > {budget} tokens）；ST 會在此中止組裝。")
+    prompt_only = [
+        s.get("scriptName") or "(未命名)"
+        for s in [*((preset.extra.get("extensions") or {}).get("regex_scripts") or []), *(card.regex_scripts if card else [])]
+        if isinstance(s, dict) and s.get("promptOnly") and not s.get("disabled")
+    ]
+    if prompt_only:
+        ctx.warnings.append(
+            f"{len(prompt_only)} 個「只改送出內容」（promptOnly）的正則尚未套用到送出的 messages：{'、'.join(prompt_only[:5])}"
+        )
 
     block_tokens = {bid: tokens.count(text) for bid, text in prepared.items()}
     for b in preset.blocks:

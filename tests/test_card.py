@@ -143,3 +143,12 @@ def test_warns_when_examples_have_no_character_lines():
     r = build(card_preset(), [], {"char": "唐心桃｜小惡魔", "user": "藍"}, card=card)
     assert [m.name for m in r.messages if m.name] == ["example_user"]
     assert any("沒有辨識到角色台詞" in w and "半形冒號" in w for w in r.warnings)
+
+
+def test_warns_about_prompt_only_regex():
+    card = CharacterCard(name="露", regex_scripts=[
+        {"scriptName": "改送出", "findRegex": "a", "replaceString": "b", "promptOnly": True, "placement": [2]},
+        {"scriptName": "顯示", "findRegex": "a", "replaceString": "b", "markdownOnly": True, "placement": [2]},
+    ])
+    r = build(card_preset(), [], {"char": "露", "user": "藍"}, card=card)
+    assert any("promptOnly" in w and "改送出" in w and "顯示" not in w for w in r.warnings)
