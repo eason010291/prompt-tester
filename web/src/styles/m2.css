@@ -725,3 +725,265 @@ textarea.tall {
   margin: 4px 0 0;
   overflow-wrap: anywhere;
 }
+
+/* ---- 版本樹 ---- */
+
+.version-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px var(--s-sm);
+  padding: 6px var(--s-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-card);
+  font-size: 13px;
+}
+
+.branch-chip {
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.base-line {
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commit-form {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.commit-form input {
+  flex: 1;
+  min-width: 220px;
+}
+
+.versions-page .page-header.row {
+  flex-wrap: wrap;
+  margin-bottom: var(--s-sm);
+}
+
+.versions-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr);
+  gap: var(--s-lg);
+  align-items: start;
+}
+
+.commit-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: calc(100vh - 140px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-card);
+}
+
+.commit-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-xs);
+  height: 44px;
+  padding-right: var(--s-sm);
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.commit-row:hover {
+  background: var(--bg-soft);
+}
+
+.commit-row.active {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-card));
+}
+
+.graph-cell {
+  flex: none;
+  margin-left: 6px;
+}
+
+.commit-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.commit-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 14px;
+  color: var(--text-strong);
+}
+
+.commit-row .muted.small {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chip.ref-branch {
+  color: var(--accent);
+}
+
+.chip.ref-tag {
+  color: var(--teal);
+}
+
+.commit-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-sm);
+  min-width: 0;
+}
+
+.commit-detail h2 {
+  font-size: 19px;
+}
+
+.ref-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: var(--s-xs);
+}
+
+.ref-list .icon-btn {
+  width: 18px;
+  height: 18px;
+}
+
+/* diff */
+
+.diff-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-xs);
+}
+
+.diff-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.diff-summary .check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.chip.st-added {
+  color: var(--success);
+}
+
+.chip.st-removed {
+  color: var(--error);
+}
+
+.chip.st-modified {
+  color: var(--amber);
+}
+
+.chip.st-toggled {
+  color: var(--teal);
+}
+
+.chip.st-moved {
+  color: #8b7fd6;
+}
+
+.diff-fields td.old {
+  color: var(--error);
+  text-decoration: line-through;
+}
+
+.diff-fields td.new {
+  color: var(--success);
+}
+
+.diff-blocks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.diff-block {
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: var(--r-md);
+  background: var(--bg-card);
+  padding: 4px var(--s-sm);
+}
+
+.diff-block.st-added {
+  border-left-color: var(--success);
+}
+
+.diff-block.st-removed {
+  border-left-color: var(--error);
+}
+
+.diff-block.st-modified {
+  border-left-color: var(--amber);
+}
+
+.diff-block.st-toggled {
+  border-left-color: var(--teal);
+}
+
+.diff-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.diff-head .apply-old {
+  margin-left: auto;
+}
+
+.content-diff {
+  margin: 6px 0 2px;
+  padding: var(--s-xs);
+  max-height: 420px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  background: var(--bg-soft);
+  border-radius: var(--r-sm);
+}
+
+.content-diff ins {
+  text-decoration: none;
+  background: color-mix(in srgb, var(--success) 25%, transparent);
+}
+
+.content-diff del {
+  background: color-mix(in srgb, var(--error) 22%, transparent);
+}
+
+@media (max-width: 1000px) {
+  .versions-grid {
+    grid-template-columns: 1fr;
+  }
+}

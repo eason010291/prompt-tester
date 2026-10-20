@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from .. import llm, providers, store
+from .. import llm, providers, store, vcs
 from ..build import BuildResult
 from ..entities import Connection
 from ..preset import Params, Preset, PreviewContext
@@ -83,8 +83,16 @@ async def generate(
     result = build_for(req.preset, scenario, req.context)
     body = request_body(result, req.preset.params, connection, req.context.seed, provider)
     preset_hash = store.snapshot_preset(conn, req.preset)
+    # 送出的預設剛好等於某個 commit 時記下，日後可追溯到版本
+    commit_id = vcs.commit_for_tree(conn, vcs.tree_id_of(req.preset))
     gid = store.create_generation(
-        conn, preset=req.preset, preset_hash=preset_hash, scenario=scenario, connection=connection, request=body
+        conn,
+        preset=req.preset,
+        preset_hash=preset_hash,
+        scenario=scenario,
+        connection=connection,
+        request=body,
+        commit_id=commit_id,
     )
 
     async def events():

@@ -1,12 +1,26 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api } from '../api'
 
-/** 讀取一個 API 資源，提供 reload。path 為 null 時不讀取。 */
+/**
+ * 讀取一個 API 資源，提供 reload。path 為 null 時不讀取。
+ * path 改變後、新資料到之前回傳 null，避免畫面顯示屬於上一個 path 的舊資料
+ * （例如 diff 切換比較對象時，舊 diff 配上新的「套用」按鈕）。reload 同一 path 時保留舊資料。
+ */
 export function useResource<T>(path: string | null) {
-  const [data, setData] = useState<T | null>(null)
+  const [result, setResult] = useState<{ path: string | null; data: T | null }>({ path: null, data: null })
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(path !== null)
   const [version, setVersion] = useState(0)
+
+  const data = result.path === path ? result.data : null
+  const setData = useCallback(
+    (next: T | null | ((cur: T | null) => T | null)) =>
+      setResult((r) => ({
+        path: r.path,
+        data: typeof next === 'function' ? (next as (cur: T | null) => T | null)(r.data) : next,
+      })),
+    [],
+  )
 
   useEffect(() => {
     if (!path) return
@@ -14,7 +28,7 @@ export function useResource<T>(path: string | null) {
     api<T>(path)
       .then((d) => {
         if (cancelled) return
-        setData(d)
+        setResult({ path, data: d })
         setError(null)
       })
       .catch((e) => {

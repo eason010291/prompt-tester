@@ -5,6 +5,7 @@ import PreviewPane from '../components/PreviewPane'
 import ScenarioPicker from '../components/ScenarioPicker'
 import SettingsPanel from '../components/SettingsPanel'
 import TryRunPanel from '../components/TryRunPanel'
+import VersionBar from '../components/VersionBar'
 import { useResource } from '../hooks/useResource'
 import { useBuild, useWorkspace, type SaveState } from '../hooks/useWorkspace'
 import type { Block, ImportResponse, Scenario } from '../types'
@@ -114,6 +115,7 @@ export default function PromptPage() {
             </button>
           </div>
         )}
+        <VersionBar preset={preset} saveState={saveState} />
         <p className="muted small">
           {preset.blocks.length} 個區塊，{enabled} 個內容區塊啟用 · 拖曳 ⠿ 排序；變體群組相同的區塊只會有一個啟用
         </p>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { api, streamApi } from '../api'
 import { formatCost, useResource } from '../hooks/useResource'
@@ -12,9 +12,12 @@ import type {
   Scenario,
   StreamEvent,
 } from '../types'
-import { collectScriptSets } from '../lib/st/format'
+import { collectScriptSets } from '../lib/st/scripts'
 import { makeMacro, type Applied } from '../lib/st/regex'
-import StMessage, { type StTheme } from './StMessage'
+import type { StTheme } from './StMessage'
+
+// ST 渲染器（showdown、DOMPurify、CSS 解析）按需載入
+const StMessage = lazy(() => import('./StMessage'))
 
 interface Props {
   preset: Preset
@@ -277,17 +280,19 @@ export default function TryRunPanel({ preset, context, scenario }: Props) {
           {raw ? (
             <div className="bubble-text">{context.user_input}</div>
           ) : (
-            <StMessage
-              text={context.user_input}
-              theme={theme}
-              isUser
-              depth={1}
-              charName={shownScenario?.char ?? ''}
-              scriptSets={scriptSets}
-              macro={macro}
-              externalMedia={externalMedia}
-              autoFixMarkdown={autoFix}
-            />
+            <Suspense fallback={<p className="muted small">渲染中…</p>}>
+              <StMessage
+                text={context.user_input}
+                theme={theme}
+                isUser
+                depth={1}
+                charName={shownScenario?.char ?? ''}
+                scriptSets={scriptSets}
+                macro={macro}
+                externalMedia={externalMedia}
+                autoFixMarkdown={autoFix}
+              />
+            </Suspense>
           )}
         </div>
       )}
@@ -307,17 +312,19 @@ export default function TryRunPanel({ preset, context, scenario }: Props) {
           {raw || running ? (
             <pre className="msg-content">{live.output}</pre>
           ) : (
-            <StMessage
-              text={live.output}
-              theme={theme}
-              depth={0}
-              charName={shownScenario?.char ?? ''}
-              scriptSets={scriptSets}
-              macro={macro}
-              externalMedia={externalMedia}
-              autoFixMarkdown={autoFix}
-              onApplied={onApplied}
-            />
+            <Suspense fallback={<p className="muted small">渲染中…</p>}>
+              <StMessage
+                text={live.output}
+                theme={theme}
+                depth={0}
+                charName={shownScenario?.char ?? ''}
+                scriptSets={scriptSets}
+                macro={macro}
+                externalMedia={externalMedia}
+                autoFixMarkdown={autoFix}
+                onApplied={onApplied}
+              />
+            </Suspense>
           )}
           {!raw && !running && live.output && (
             <p className="muted small applied">

@@ -284,6 +284,8 @@ export interface Workspace {
   preset: Preset
   context: PreviewContext
   updated_at: string | null
+  branch: string | null
+  base_commit: string | null
 }
 
 export type Origin = 'block' | 'history' | 'injection' | 'separator' | 'placeholder' | 'card' | 'worldinfo' | 'example'
@@ -367,4 +369,69 @@ export function newConnection(partial: Partial<Connection> = {}): Connection {
     extra_body: {},
     ...partial,
   }
+}
+
+// ---- 版本樹（M3） ----
+
+export interface Commit {
+  id: string
+  tree_id: string
+  parents: string[]
+  author: string
+  message: string
+  created_at: string
+  meta: Record<string, unknown>
+  generations?: number
+}
+
+export interface Ref {
+  name: string
+  kind: 'branch' | 'tag'
+  commit_id: string
+  protected: boolean
+  updated_at: string
+}
+
+export interface HeadState {
+  branch: string | null
+  base_commit: Commit | null
+  dirty: boolean
+  tree_id: string
+}
+
+export interface VcsLog {
+  commits: Commit[]
+  refs: Ref[]
+  head: { branch: string | null; base_commit: string | null }
+}
+
+export type DiffStatus = 'added' | 'removed' | 'modified' | 'toggled' | 'moved' | 'unchanged'
+
+export interface BlockDiff {
+  id: string
+  name: string
+  status: DiffStatus[]
+  changes: Record<string, [unknown, unknown]>
+  old_index: number | null
+  new_index: number | null
+  old: Block | null
+  new: Block | null
+}
+
+export interface PresetDiff {
+  name: [string, string] | null
+  params: Record<string, [unknown, unknown]>
+  options: Record<string, [unknown, unknown]>
+  extra_changed: boolean
+  summary: Record<'added' | 'removed' | 'modified' | 'toggled' | 'moved', number>
+  blocks: BlockDiff[]
+}
+
+export const shortId = (id: string | null | undefined) => (id ? id.slice(0, 8) : '')
+
+export function authorLabel(author: string): string {
+  if (author === 'human') return '人工'
+  if (author.startsWith('llm:')) return `LLM · ${author.slice(4)}`
+  if (author.startsWith('agent:')) return `外部 · ${author.slice(6)}`
+  return author
 }

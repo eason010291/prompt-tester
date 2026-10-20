@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__, db, store
 from .config import Settings, load_settings
-from .routes import generate, prompt, scenarios, settings as settings_routes
+from .routes import generate, prompt, scenarios, settings as settings_routes, vcs as vcs_routes
 
 
 def create_app(settings: Settings | None = None, http_transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
@@ -43,6 +43,7 @@ def create_app(settings: Settings | None = None, http_transport: httpx.AsyncBase
     app.include_router(scenarios.router)
     app.include_router(settings_routes.router)
     app.include_router(generate.router)
+    app.include_router(vcs_routes.router)
     _mount_frontend(app, settings)
     return app
 

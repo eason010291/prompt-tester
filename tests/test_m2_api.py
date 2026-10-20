@@ -48,7 +48,7 @@ def test_legacy_workspace_context_migrates_to_scenario(env):
     legacy = {"char": "聿", "user": "藍", "seed": 7,
               "history": [{"role": "assistant", "content": "開場"}, {"role": "user", "content": "嗨"}]}
     with conn:
-        conn.execute("INSERT INTO workspaces VALUES (1, ?, ?, 'x')",
+        conn.execute("INSERT INTO workspaces (id, preset, context, updated_at) VALUES (1, ?, ?, 'x')",
                      (json.dumps({"name": "p", "blocks": []}), json.dumps(legacy)))
     conn.close()
 

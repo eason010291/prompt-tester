@@ -22,6 +22,9 @@ class Workspace(BaseModel):
     preset: Preset
     context: PreviewContext
     updated_at: str | None = None
+    # 版本樹位置（唯讀；由 /api/vcs 變更）
+    branch: str | None = "main"
+    base_commit: str | None = None
 
 
 def migrate_workspace(conn: sqlite3.Connection) -> None:
@@ -41,13 +44,17 @@ def migrate_workspace(conn: sqlite3.Connection) -> None:
 
 @router.get("/workspace")
 def get_workspace(conn: sqlite3.Connection = Depends(get_db)) -> Workspace:
-    row = conn.execute("SELECT preset, context, updated_at FROM workspaces WHERE id = ?", (WORKSPACE_ID,)).fetchone()
+    row = conn.execute(
+        "SELECT preset, context, updated_at, branch, base_commit FROM workspaces WHERE id = ?", (WORKSPACE_ID,)
+    ).fetchone()
     if row is None:
         return Workspace(preset=starter_preset(), context=_context_for(_first_scenario(conn)))
     return Workspace(
         preset=Preset.model_validate_json(row["preset"]),
         context=PreviewContext.model_validate_json(row["context"]),
         updated_at=row["updated_at"],
+        branch=row["branch"],
+        base_commit=row["base_commit"],
     )
 
 

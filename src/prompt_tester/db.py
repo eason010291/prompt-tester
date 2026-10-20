@@ -69,6 +69,40 @@ MIGRATIONS: list[tuple[int, str]] = [
         CREATE INDEX generations_created ON generations(created_at DESC);
         """,
     ),
+    (
+        4,
+        # M3：預設版本庫（內容定址 blob / tree / commit 與 ref），工作區掛在分支上
+        """
+        CREATE TABLE blobs (
+            id   TEXT PRIMARY KEY,
+            data TEXT NOT NULL
+        );
+        CREATE TABLE trees (
+            id   TEXT PRIMARY KEY,
+            data TEXT NOT NULL
+        );
+        CREATE TABLE commits (
+            id         TEXT PRIMARY KEY,
+            tree_id    TEXT NOT NULL REFERENCES trees(id),
+            parents    TEXT NOT NULL,
+            author     TEXT NOT NULL,
+            message    TEXT NOT NULL,
+            meta       TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX commits_tree ON commits(tree_id);
+        CREATE TABLE refs (
+            name       TEXT PRIMARY KEY,
+            kind       TEXT NOT NULL CHECK (kind IN ('branch', 'tag')),
+            commit_id  TEXT REFERENCES commits(id),
+            protected  INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
+        );
+        ALTER TABLE workspaces ADD COLUMN branch TEXT DEFAULT 'main';  -- NULL = detached
+        ALTER TABLE workspaces ADD COLUMN base_commit TEXT;
+        ALTER TABLE generations ADD COLUMN commit_id TEXT;
+        """,
+    ),
 ]
 
 
