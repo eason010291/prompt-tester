@@ -1,11 +1,14 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { NavLink, Navigate, Route, Routes } from 'react-router'
 import { api, type Health } from './api'
 import { useTheme, type Theme } from './theme'
 import Placeholder from './pages/Placeholder'
 import PromptPage from './pages/PromptPage'
-import ScenariosPage from './pages/ScenariosPage'
-import SettingsPage from './pages/SettingsPage'
+
+// 次要頁面按需載入（diff、模型列表等套件只在用到時下載）
+const ScenariosPage = lazy(() => import('./pages/ScenariosPage'))
+const SettingsPage = lazy(() => import('./pages/SettingsPage'))
+const VersionsPage = lazy(() => import('./pages/VersionsPage'))
 
 interface Section {
   path: string
@@ -65,7 +68,7 @@ const SECTIONS: Section[] = [
   },
 ]
 
-const BUILT = new Set(['/prompt', '/scenarios', '/settings'])
+const BUILT = new Set(['/prompt', '/scenarios', '/settings', '/versions'])
 
 const THEMES: { value: Theme; label: string }[] = [
   { value: 'system', label: '系統' },
@@ -105,20 +108,23 @@ export default function App() {
         </div>
       </nav>
       <main className="main">
-        <Routes>
-          <Route path="/" element={<Navigate to="/prompt" replace />} />
-          <Route path="/prompt" element={<PromptPage />} />
-          <Route path="/scenarios" element={<ScenariosPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          {SECTIONS.filter((s) => !BUILT.has(s.path)).map((s) => (
-            <Route
-              key={s.path}
-              path={s.path}
-              element={<Placeholder title={s.label} milestone={s.milestone} plans={s.plans} />}
-            />
-          ))}
-          <Route path="*" element={<Navigate to="/prompt" replace />} />
-        </Routes>
+        <Suspense fallback={<p className="muted">載入中…</p>}>
+          <Routes>
+            <Route path="/" element={<Navigate to="/prompt" replace />} />
+            <Route path="/prompt" element={<PromptPage />} />
+            <Route path="/scenarios" element={<ScenariosPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/versions" element={<VersionsPage />} />
+            {SECTIONS.filter((s) => !BUILT.has(s.path)).map((s) => (
+              <Route
+                key={s.path}
+                path={s.path}
+                element={<Placeholder title={s.label} milestone={s.milestone} plans={s.plans} />}
+              />
+            ))}
+            <Route path="*" element={<Navigate to="/prompt" replace />} />
+          </Routes>
+        </Suspense>
       </main>
     </div>
   )

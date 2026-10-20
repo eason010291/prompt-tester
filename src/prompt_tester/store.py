@@ -115,24 +115,32 @@ def snapshot_preset(conn: sqlite3.Connection, preset: Preset) -> str:
 # ---- 生成紀錄 ----
 
 GENERATION_SUMMARY = (
-    "id, created_at, status, preset_name, preset_hash, scenario_id, model, served_by, cost, cost_source, "
+    "id, created_at, status, preset_name, preset_hash, commit_id, scenario_id, model, served_by, cost, cost_source, "
     "latency_ms, first_token_ms, finish_reason, error, substr(output, 1, 200) AS excerpt, "
     "json_extract(scenario, '$.name') AS scenario_name, json_extract(connection, '$.name') AS connection_name"
 )
 
 
 def create_generation(
-    conn: sqlite3.Connection, *, preset: Preset, preset_hash: str, scenario: Scenario, connection: Connection, request: dict
+    conn: sqlite3.Connection,
+    *,
+    preset: Preset,
+    preset_hash: str,
+    scenario: Scenario,
+    connection: Connection,
+    request: dict,
+    commit_id: str | None = None,
 ) -> int:
     with conn:
         return conn.execute(
-            """INSERT INTO generations (created_at, status, preset_name, preset_hash, scenario_id, scenario,
+            """INSERT INTO generations (created_at, status, preset_name, preset_hash, commit_id, scenario_id, scenario,
                                         connection, request, model)
-               VALUES (?, 'running', ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, 'running', ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 now_iso(),
                 preset.name,
                 preset_hash,
+                commit_id,
                 scenario.id,
                 scenario.model_dump_json(),
                 connection.model_dump_json(),

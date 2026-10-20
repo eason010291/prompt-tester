@@ -11,8 +11,9 @@
 | M7（部分） | ST 預設匯入 / 匯出、角色卡（JSON / PNG）、世界書觸發、範例對話 | ✅ |
 | M8（部分） | 正則與訊息渲染（與 ST 逐字比對一致） | ✅ |
 | M2 | OpenRouter 連線、情境管理、串流生成與紀錄 | ✅ |
-| M3 | 預設版本樹（commit、分支、diff） | 下一步 |
-| M4–M6 | 金字塔批次、評語迴歸、LLM 修改（內建迴圈 / MCP / REST） | 規劃中 |
+| M3 | 預設版本樹（commit、分支、標籤、diff、cherry-pick） | ✅ |
+| M4 | 腳本與金字塔批次 | 下一步 |
+| M5–M6 | 評語迴歸、LLM 修改（內建迴圈 / MCP / REST） | 規劃中 |
 
 ## 需求
 
@@ -64,6 +65,7 @@ cd web && npm run lint && npm run build
 | `src/prompt_tester/st_preset.py` | ST 預設匯入 / 匯出 |
 | `src/prompt_tester/st_card.py` | ST 角色卡讀取 |
 | `src/prompt_tester/worldinfo.py` | 世界書觸發 |
+| `src/prompt_tester/vcs.py` | 預設版本庫（blob / tree / commit / ref、diff） |
 | `src/prompt_tester/llm.py` | OpenAI 相容串流 client |
 | `src/prompt_tester/providers.py` | 供應商金鑰與模型目錄 |
 | `src/prompt_tester/routes/` | API 路由 |
