@@ -35,9 +35,13 @@ class MacroContext:
     last_message: str = ""
     last_user_message: str = ""
     last_char_message: str = ""
-    original: str = ""
+    # {{original}}：None 表示目前沒有原文可代入，巨集保留原樣（ST MacroEnvBuilder:143-150）；
+    # 有值時只替換第一個 {{original}}，之後的變成空字串
+    original: str | None = None
     max_context: int = 0
     max_response: int = 0
+    # 世界書 outlet 條目：{{outlet::名稱}}
+    outlets: dict[str, str] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     rng: random.Random = field(init=False)
 
@@ -269,6 +273,12 @@ class _Evaluator:
         if scoped is not None:
             args.append(_dedent_trim(self.resolve(scoped, offset)))
 
+        if name == "original":
+            if self.ctx.original is None:
+                return raw
+            value, self.ctx.original = self.ctx.original, ""
+            return value
+
         handler = _HANDLERS.get(name)
         if handler is None:
             if name in self.ctx.names:
@@ -441,7 +451,7 @@ _HANDLERS = {
     "lastmessage": lambda ev, a, s, o: ev.ctx.last_message,
     "lastusermessage": lambda ev, a, s, o: ev.ctx.last_user_message,
     "lastcharmessage": lambda ev, a, s, o: ev.ctx.last_char_message,
-    "original": lambda ev, a, s, o: ev.ctx.original,
+    "outlet": lambda ev, a, s, o: ev.ctx.outlets.get(a[0], "") if a else "",
     "maxprompt": lambda ev, a, s, o: str(ev.ctx.max_context - ev.ctx.max_response),
     "maxcontext": lambda ev, a, s, o: str(ev.ctx.max_context),
     "maxresponse": lambda ev, a, s, o: str(ev.ctx.max_response),

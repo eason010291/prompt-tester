@@ -621,3 +621,78 @@ textarea.tall {
     position: static;
   }
 }
+
+/* ---- 角色卡 ---- */
+
+.import-card {
+  align-self: flex-start;
+  margin-bottom: var(--s-xs);
+  cursor: pointer;
+}
+
+.card-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.card-section .list-head h2 {
+  flex: 1;
+  font-size: 18px;
+}
+
+.greetings {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: var(--s-xs);
+}
+
+.field-fold {
+  border-top: 1px solid var(--border-soft);
+  padding: 6px 0;
+}
+
+.field-fold > summary {
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.field-fold textarea {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  min-height: 4lh;
+  field-sizing: content;
+  max-height: 50vh;
+  resize: vertical;
+}
+
+.field-fold .form-row-inline input[type='number'] {
+  width: 70px;
+}
+
+.lore-table td {
+  vertical-align: top;
+}
+
+.lore-keys {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.link-btn {
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text-strong);
+}
+
+.lore-table textarea {
+  min-height: 6lh;
+}

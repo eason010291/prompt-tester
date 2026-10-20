@@ -40,6 +40,10 @@ PARAM_KEYS = {
 OPTION_KEYS = {
     "squash_system_messages": "squash_system_messages",
     "new_chat_prompt": "new_chat_prompt",
+    "new_example_chat_prompt": "new_example_chat_prompt",
+    "wi_format": "wi_format",
+    "scenario_format": "scenario_format",
+    "personality_format": "personality_format",
 }
 
 # Block 直接對應的 prompt 欄位；其餘 prompt 欄位放進 Block.st
@@ -104,7 +108,7 @@ def import_preset(data: dict, name: str = "") -> tuple[Preset, list[str]]:
         notes.append(f"{len(regex)} 個正則腳本已保留（M8 才會用於渲染）。")
     unfilled = sorted({b.marker for b in blocks if b.kind == "marker" and b.enabled and b.marker != "chatHistory"})
     if unfilled:
-        notes.append("以下 marker 需要角色卡 / 世界書（M7）才有內容，目前組裝為空：" + "、".join(unfilled))
+        notes.append("以下 marker 由情境的角色卡 / 世界書 / persona 填入，情境沒有對應內容時組裝為空：" + "、".join(unfilled))
 
     return Preset(name=name or "匯入的預設", blocks=blocks, params=params, options=options, extra=extra), notes
 

@@ -105,8 +105,11 @@ export default function BlockCard(props: Props) {
           block.marker === 'chatHistory' ? (
             <span className="chip chip-marker">{MARKER_LABEL.chatHistory}</span>
           ) : (
-            <span className="chip" title="需要角色卡 / 世界書（M7）才有內容，目前組裝為空">
-              {block.marker ? MARKER_LABEL[block.marker] : 'marker'} · 待接角色卡
+            <span
+              className={`chip ${tokens ? 'chip-marker' : ''}`}
+              title={tokens ? '由目前情境的角色卡 / 世界書 / persona 填入' : '目前情境沒有這部分內容，組裝為空'}
+            >
+              {block.marker ? MARKER_LABEL[block.marker] : 'marker'} · {tokens ? '由情境填入' : '情境無內容'}
             </span>
           )
         ) : (
@@ -129,7 +132,7 @@ export default function BlockCard(props: Props) {
           </>
         )}
         <span className="token-count" title="展開巨集後的 token 估算">
-          {block.enabled && tokens !== undefined ? `${tokens} tok` : ''}
+          {block.enabled && tokens ? `${tokens} tok` : ''}
         </span>
         {!isMarker && (
           <button

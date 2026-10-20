@@ -71,6 +71,23 @@ class Options(BaseModel):
     new_chat_prompt: str = "[Start a new Chat]"
     # ST config.yaml promptPlaceholder；strict 後處理補位用
     prompt_placeholder: str = "[Start a new chat]"
+    # 每個範例對話區塊前的分隔訊息
+    new_example_chat_prompt: str = "[Example Chat]"
+    # 角色卡欄位的包裝格式（ST 預設值）；wi_format 以 {0} 代表世界書內容
+    wi_format: str = "{0}"
+    scenario_format: str = "{{scenario}}"
+    personality_format: str = "{{personality}}"
+    # ST power_user：角色卡的 system_prompt / post_history_instructions 覆寫 main / jailbreak
+    prefer_character_prompt: bool = True
+    prefer_character_jailbreak: bool = True
+    # 世界書（ST 全新安裝預設：遞迴與全字比對開啟）
+    wi_scan_depth: int = 2
+    wi_budget_percent: int = 25
+    wi_budget_cap: int = 0
+    wi_recursive: bool = True
+    wi_case_sensitive: bool = False
+    wi_match_whole_words: bool = True
+    wi_include_names: bool = True
 
 
 class Preset(BaseModel):

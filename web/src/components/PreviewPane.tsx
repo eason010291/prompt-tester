@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { BuildResponse } from '../types'
+import { WI_POSITION, type BuildResponse } from '../types'
 
 interface Props {
   result: BuildResponse | null
@@ -19,6 +19,9 @@ const ORIGIN_LABEL = {
   injection: '注入',
   separator: '分隔',
   placeholder: '補位',
+  card: '角色卡',
+  worldinfo: '世界書',
+  example: '範例',
   block: '',
 } as const
 
@@ -132,6 +135,40 @@ export default function PreviewPane({ result, error, busy, expandMacros, onExpan
       )}
 
       {result && view === 'json' && <pre className="json-view">{json}</pre>}
+
+      {result?.worldinfo && (
+        <details className="vars">
+          <summary>
+            世界書：觸發 {result.worldinfo.activated.length} / {result.worldinfo.total_entries} 條 ·{' '}
+            {result.worldinfo.used_tokens.toLocaleString()} / 預算 {result.worldinfo.budget.toLocaleString()} tokens
+          </summary>
+          <table className="ep-table">
+            <thead>
+              <tr>
+                <th className="num">順序</th>
+                <th>條目</th>
+                <th>位置</th>
+                <th>原因</th>
+                <th className="num">tokens</th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.worldinfo.activated.map((a) => (
+                <tr key={a.uid}>
+                  <td className="num">{a.order}</td>
+                  <td>{a.comment || `#${a.uid}`}</td>
+                  <td>
+                    {WI_POSITION[a.position] ?? a.position}
+                    {a.position === 4 && ` ${a.depth}`}
+                  </td>
+                  <td>{a.reason === 'constant' ? '常駐' : a.reason.replace(/^key:/, '關鍵字：')}</td>
+                  <td className="num">{a.tokens.toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      )}
 
       {result && Object.keys(result.variables).length > 0 && (
         <details className="vars">

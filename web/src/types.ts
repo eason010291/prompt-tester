@@ -59,6 +59,19 @@ export interface Options {
   post_processing: PostProcessing
   new_chat_prompt: string
   prompt_placeholder: string
+  new_example_chat_prompt: string
+  wi_format: string
+  scenario_format: string
+  personality_format: string
+  prefer_character_prompt: boolean
+  prefer_character_jailbreak: boolean
+  wi_scan_depth: number
+  wi_budget_percent: number
+  wi_budget_cap: number
+  wi_recursive: boolean
+  wi_case_sensitive: boolean
+  wi_match_whole_words: boolean
+  wi_include_names: boolean
 }
 
 export interface Preset {
@@ -82,6 +95,76 @@ export interface PreviewContext {
   user_input: string
 }
 
+export interface LoreEntry {
+  uid: number
+  comment: string
+  keys: string[]
+  secondary_keys: string[]
+  content: string
+  constant: boolean
+  selective: boolean
+  selective_logic: number
+  enabled: boolean
+  order: number
+  position: number
+  depth: number
+  role: number
+  probability: number
+  use_probability: boolean
+  scan_depth: number | null
+  case_sensitive: boolean | null
+  match_whole_words: boolean | null
+  exclude_recursion: boolean
+  prevent_recursion: boolean
+  delay_until_recursion: number
+  group: string
+  group_override: boolean
+  group_weight: number
+  use_group_scoring: boolean | null
+  ignore_budget: boolean
+  outlet_name: string
+  triggers: string[]
+  match_sources: string[]
+}
+
+export interface Lorebook {
+  name: string
+  entries: LoreEntry[]
+  scan_depth: number | null
+  token_budget: number | null
+  recursive_scanning: boolean | null
+}
+
+export interface CharacterCard {
+  spec: string
+  name: string
+  description: string
+  personality: string
+  scenario: string
+  first_mes: string
+  mes_example: string
+  creator_notes: string
+  system_prompt: string
+  post_history_instructions: string
+  alternate_greetings: string[]
+  depth_prompt: { prompt: string; depth: number; role: Role }
+  regex_scripts: Record<string, unknown>[]
+  book: Lorebook | null
+  raw: Record<string, unknown>
+}
+
+/** ST world_info_position */
+export const WI_POSITION: Record<number, string> = {
+  0: '角色前',
+  1: '角色後',
+  2: 'AN 上',
+  3: 'AN 下',
+  4: '@深度',
+  5: '範例上',
+  6: '範例下',
+  7: 'outlet',
+}
+
 export interface Scenario {
   id: number | null
   name: string
@@ -92,6 +175,8 @@ export interface Scenario {
   history: HistoryMessage[]
   user_turns: string[]
   notes: string
+  persona: string
+  card: CharacterCard | null
   updated_at: string | null
 }
 
@@ -201,7 +286,7 @@ export interface Workspace {
   updated_at: string | null
 }
 
-export type Origin = 'block' | 'history' | 'injection' | 'separator' | 'placeholder'
+export type Origin = 'block' | 'history' | 'injection' | 'separator' | 'placeholder' | 'card' | 'worldinfo' | 'example'
 
 export interface BuiltMessage {
   role: Role
@@ -220,6 +305,12 @@ export interface BuildResponse {
   block_tokens: Record<string, number>
   variables: Record<string, string>
   warnings: string[]
+  worldinfo: {
+    budget: number
+    used_tokens: number
+    total_entries: number
+    activated: { uid: number; comment: string; position: number; depth: number; order: number; reason: string; tokens: number }[]
+  } | null
 }
 
 export function newBlock(partial: Partial<Block> = {}): Block {
@@ -257,6 +348,8 @@ export function newScenario(partial: Partial<Scenario> = {}): Scenario {
     history: [],
     user_turns: [''],
     notes: '',
+    persona: '',
+    card: null,
     updated_at: null,
     ...partial,
   }
