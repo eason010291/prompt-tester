@@ -28,13 +28,14 @@ export default function SettingsPage() {
   const connections = useResource<Connection[]>('/connections')
   const [openId, setOpenId] = useState<number | null>(null)
 
-  const add = async (partial: Partial<Connection> = {}) => {
+  const add = async (partial: Partial<Connection> = {}, open = true) => {
     const created = await api<Connection>('/connections', {
       method: 'POST',
       body: JSON.stringify(newConnection({ routing: { ...newConnection().routing, quantizations: NO_FP4 }, ...partial })),
     })
     connections.setData((cur) => [...(cur ?? []), created])
-    setOpenId(created.id)
+    if (open) setOpenId(created.id)
+    return created
   }
 
   return (
@@ -46,6 +47,7 @@ export default function SettingsPage() {
 
       <section className="card">
         <h2>供應商</h2>
+        <p className="muted small">API 端點與金鑰（例如 OpenRouter）。設定好之後，到下方「連線」選擇要用的模型。</p>
         {providers.error && <p className="alert alert-error">{providers.error}</p>}
         {providers.data?.map((p) => (
           <ProviderRow key={p.name} provider={p} onSaved={providers.reload} />
@@ -59,6 +61,9 @@ export default function SettingsPage() {
             ＋ 新增
           </button>
         </div>
+        <p className="muted small">
+          連線 = 供應商 + 模型 + 路由設定。提示詞試跑、多回合試跑與模擬使用者，選的都是這裡的連線。
+        </p>
         <p className="muted small">
           快速新增（預設排除 fp4 量化）：
           {QUICK_ADD.map((q) => (
@@ -81,7 +86,7 @@ export default function SettingsPage() {
         {connections.data?.length === 0 && <p className="muted">還沒有連線，用上方按鈕新增。</p>}
       </section>
 
-      <UserSimCard connections={connections.data ?? []} />
+      <UserSimCard connections={connections.data ?? []} onQuickAdd={() => add(QUICK_ADD[0].conn, false)} />
     </div>
   )
 }
@@ -439,12 +444,18 @@ function EndpointTable({
   )
 }
 
-function UserSimCard({ connections }: { connections: Connection[] }) {
-  const { data } = useResource<UserSimSettings>('/user-sim')
-  return data ? <UserSimForm initial={data} connections={connections} /> : null
+interface UserSimProps {
+  connections: Connection[]
+  /** 建立一個便宜的連線（GLM-5.3-Flash）並回傳 */
+  onQuickAdd: () => Promise<Connection>
 }
 
-function UserSimForm({ initial, connections }: { initial: UserSimSettings; connections: Connection[] }) {
+function UserSimCard({ connections, onQuickAdd }: UserSimProps) {
+  const { data } = useResource<UserSimSettings>('/user-sim')
+  return data ? <UserSimForm initial={data} connections={connections} onQuickAdd={onQuickAdd} /> : null
+}
+
+function UserSimForm({ initial, connections, onQuickAdd }: UserSimProps & { initial: UserSimSettings }) {
   const [s, setS] = useState(initial)
   const state = useAutosave(s, (v) => api('/user-sim', { method: 'PUT', body: JSON.stringify(v) }))
   const set = (patch: Partial<UserSimSettings>) => setS((x) => ({ ...x, ...patch }))
@@ -464,6 +475,20 @@ function UserSimForm({ initial, connections }: { initial: UserSimSettings; conne
       <p className="muted small">
         多回合試跑時由 LLM 扮演 {'{{user}}'}。人設取自情境的 persona、目標取自情境的「使用者目標」。建議用便宜的模型（例如 GLM-5.3-Flash）。
       </p>
+      {connections.length === 0 && (
+        <p className="alert">
+          還沒有任何連線，下拉選單是空的。可以到上方「連線」新增，或直接
+          <button
+            className="btn btn-sm quick"
+            onClick={async () => {
+              const created = await onQuickAdd()
+              set({ connection_id: created.id })
+            }}
+          >
+            建立 GLM-5.3-Flash 連線並使用
+          </button>
+        </p>
+      )}
       <div className="form-grid">
         <label>
           連線
@@ -471,7 +496,7 @@ function UserSimForm({ initial, connections }: { initial: UserSimSettings; conne
             <option value="">（未設定）</option>
             {connections.map((c) => (
               <option key={c.id} value={c.id!}>
-                {c.name}
+                {c.name}（{c.model || '未選模型'}）
               </option>
             ))}
           </select>
