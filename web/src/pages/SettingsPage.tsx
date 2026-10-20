@@ -8,6 +8,7 @@ import {
   type ModelInfo,
   type ProviderInfo,
   type ReasoningEffort,
+  type UserSimSettings,
 } from '../types'
 
 const SAVE_LABEL = { saved: '已儲存', dirty: '未儲存', saving: '儲存中…', error: '儲存失敗' }
@@ -79,6 +80,8 @@ export default function SettingsPage() {
         ))}
         {connections.data?.length === 0 && <p className="muted">還沒有連線，用上方按鈕新增。</p>}
       </section>
+
+      <UserSimCard connections={connections.data ?? []} />
     </div>
   )
 }
@@ -433,5 +436,87 @@ function EndpointTable({
       )}
       <p className="muted small">價格單位：USD / 百萬 tokens。實際費用以 API 回傳為準。</p>
     </div>
+  )
+}
+
+function UserSimCard({ connections }: { connections: Connection[] }) {
+  const { data } = useResource<UserSimSettings>('/user-sim')
+  return data ? <UserSimForm initial={data} connections={connections} /> : null
+}
+
+function UserSimForm({ initial, connections }: { initial: UserSimSettings; connections: Connection[] }) {
+  const [s, setS] = useState(initial)
+  const state = useAutosave(s, (v) => api('/user-sim', { method: 'PUT', body: JSON.stringify(v) }))
+  const set = (patch: Partial<UserSimSettings>) => setS((x) => ({ ...x, ...patch }))
+
+  const resetTemplate = async () => {
+    if (!window.confirm('把模板還原成預設內容？')) return
+    const { template: _omit, ...rest } = s
+    setS(await api<UserSimSettings>('/user-sim', { method: 'PUT', body: JSON.stringify(rest) }))
+  }
+
+  return (
+    <section className="card">
+      <div className="list-head">
+        <h2>模擬使用者</h2>
+        <span className={`save-state save-${state}`}>{SAVE_LABEL[state]}</span>
+      </div>
+      <p className="muted small">
+        多回合試跑時由 LLM 扮演 {'{{user}}'}。人設取自情境的 persona、目標取自情境的「使用者目標」。建議用便宜的模型（例如 GLM-5.3-Flash）。
+      </p>
+      <div className="form-grid">
+        <label>
+          連線
+          <select value={s.connection_id ?? ''} onChange={(e) => set({ connection_id: Number(e.target.value) || null })}>
+            <option value="">（未設定）</option>
+            {connections.map((c) => (
+              <option key={c.id} value={c.id!}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          temperature
+          <input type="number" step={0.05} min={0} max={2} value={s.temperature} onChange={(e) => set({ temperature: Number(e.target.value) })} />
+        </label>
+        <label>
+          回覆上限（含推理）
+          <input type="number" step={100} min={50} value={s.max_tokens} onChange={(e) => set({ max_tokens: Number(e.target.value) })} />
+        </label>
+        <label>
+          參考最近幾則訊息
+          <input type="number" min={1} max={40} value={s.context_messages} onChange={(e) => set({ context_messages: Number(e.target.value) })} />
+        </label>
+        <label>
+          推理強度
+          <select
+            value={s.reasoning_effort ?? 'inherit'}
+            onChange={(e) => set({ reasoning_effort: e.target.value === 'inherit' ? null : (e.target.value as ReasoningEffort) })}
+          >
+            <option value="inherit">沿用連線設定</option>
+            <option value="">不送（模型預設）</option>
+            {['none', 'minimal', 'low', 'medium', 'high'].map((v) => (
+              <option key={v} value={v}>
+                {v}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={s.strip_markup} onChange={(e) => set({ strip_markup: e.target.checked })} />
+          剝除角色回覆的思考鏈、狀態欄 HTML
+        </label>
+      </div>
+      <label className="stack">
+        系統指示模板（可用 {'{{user}}'}、{'{{char}}'}、{'{{persona}}'}、{'{{user_goal}}'}）
+        <textarea className="tall" value={s.template} onChange={(e) => set({ template: e.target.value })} />
+      </label>
+      <div className="add-bar">
+        <button className="btn btn-sm" onClick={resetTemplate}>
+          還原預設模板
+        </button>
+      </div>
+    </section>
   )
 }

@@ -1,7 +1,6 @@
 """單次生成（SSE 串流）與生成紀錄。"""
 
 import asyncio
-import json
 import sqlite3
 
 import httpx
@@ -10,9 +9,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from .. import llm, providers, store, vcs
-from ..build import BuildResult
-from ..entities import Connection
-from ..preset import Params, Preset, PreviewContext
+from ..preset import Preset, PreviewContext
+from ..runner import estimate_cost, request_body, sse
 from .deps import get_db, get_http
 from .prompt import build_for, resolve_scenario
 
@@ -23,43 +21,6 @@ class GenerateRequest(BaseModel):
     preset: Preset
     context: PreviewContext
     connection_id: int
-
-
-def request_body(result: BuildResult, params: Params, connection: Connection, seed: int, provider: providers.Provider) -> dict:
-    body: dict = {
-        "model": connection.model,
-        "messages": result.to_api(),
-        "temperature": params.temperature,
-        "top_p": params.top_p,
-        "frequency_penalty": params.frequency_penalty,
-        "presence_penalty": params.presence_penalty,
-        "max_tokens": params.max_tokens,
-    }
-    if connection.send_seed:
-        body["seed"] = seed
-    if provider.is_openrouter:
-        if routing := connection.routing.to_body():
-            body["provider"] = routing
-        if connection.reasoning_effort:
-            body["reasoning"] = {"effort": connection.reasoning_effort}
-    elif connection.reasoning_effort:
-        body["reasoning_effort"] = connection.reasoning_effort
-    body.update(connection.extra_body)
-    return body
-
-
-def _estimate_cost(provider: providers.Provider, model: str, usage: dict | None) -> float | None:
-    info = providers.cached_model(provider, model)
-    if not info or not usage:
-        return None
-    p = info["pricing"]
-    if p["prompt"] is None or p["completion"] is None:
-        return None
-    return (usage.get("prompt_tokens", 0) * p["prompt"] + usage.get("completion_tokens", 0) * p["completion"]) / 1e6
-
-
-def _sse(event: dict) -> str:
-    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
 @router.post("/generate")
@@ -81,7 +42,7 @@ async def generate(
         raise HTTPException(422, "尚未設定 OpenRouter API key（設定頁或環境變數 OPENROUTER_API_KEY）")
 
     result = build_for(req.preset, scenario, req.context)
-    body = request_body(result, req.preset.params, connection, req.context.seed, provider)
+    body = request_body(result.to_api(), req.preset.params, connection, req.context.seed, provider)
     preset_hash = store.snapshot_preset(conn, req.preset)
     # 送出的預設剛好等於某個 commit 時記下，日後可追溯到版本
     commit_id = vcs.commit_for_tree(conn, vcs.tree_id_of(req.preset))
@@ -122,7 +83,7 @@ async def generate(
                 **extra,
             )
 
-        yield _sse({"type": "start", "id": gid, "message_count": len(result.messages), "warnings": result.warnings})
+        yield sse({"type": "start", "id": gid, "message_count": len(result.messages), "warnings": result.warnings})
         try:
             async for ev in llm.stream_chat(http, provider, body):
                 kind = ev["type"]
@@ -130,17 +91,17 @@ async def generate(
                     if first_ms is None:
                         first_ms = llm.now_ms() - t0
                     (output if kind == "content" else reasoning).append(ev["text"])
-                    yield _sse(ev)
+                    yield sse(ev)
                 elif kind == "meta":
                     meta = ev
-                    yield _sse(ev)
+                    yield sse(ev)
                 elif kind == "finish":
                     finish = ev["reason"]
                 elif kind == "usage":
                     usage = ev["usage"]
         except llm.LLMError as e:
             save("error", str(e))
-            yield _sse({"type": "error", "message": str(e)})
+            yield sse({"type": "error", "message": str(e)})
             return
         except asyncio.CancelledError:
             save("cancelled", "使用者中止")
@@ -154,11 +115,11 @@ async def generate(
                 if cost is None and stats.get("total_cost") is not None:
                     cost, cost_source = stats["total_cost"], "generation"
         if cost is None:
-            cost = _estimate_cost(provider, connection.model, usage)
+            cost = estimate_cost(provider, connection.model, usage)
             cost_source = "estimate" if cost is not None else None
 
         save("done", cost=cost, cost_source=cost_source)
-        yield _sse({"type": "done", "generation": store.get_generation(conn, gid)})
+        yield sse({"type": "done", "generation": store.get_generation(conn, gid)})
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 

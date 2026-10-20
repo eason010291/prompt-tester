@@ -93,8 +93,10 @@ class Scenario(BaseModel):
     # 逐回合的使用者輸入；單次生成預設帶入第一則，M4 多回合依序使用
     user_turns: list[str] = Field(default_factory=list)
     notes: str = ""
-    # 使用者 persona 描述（填入 personaDescription marker）
+    # 使用者 persona 描述（填入 personaDescription marker；也是模擬使用者的人設）
     persona: str = ""
+    # 模擬使用者在這段劇情中的目標
+    user_goal: str = ""
     # 匯入的角色卡；有值時填入 charDescription / charPersonality / scenario / dialogueExamples / 世界書等 marker
     card: CharacterCard | None = None
     updated_at: str | None = None

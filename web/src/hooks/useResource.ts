@@ -50,20 +50,33 @@ export function useResource<T>(path: string | null) {
   return { data, setData, error, loading, reload }
 }
 
-/** 防抖自動儲存：value 改變後 delay 毫秒呼叫 save。第一次的值視為已儲存。 */
+/**
+ * 防抖自動儲存：value 改變後 delay 毫秒呼叫 save。第一次的值視為已儲存。
+ * 元件卸載時（例如切換到另一個情境）若還有沒送出的變更，立刻送出，避免遺失。
+ */
 export function useAutosave<T>(value: T, save: (v: T) => Promise<unknown>, delay = 700) {
   const [state, setState] = useState<'saved' | 'dirty' | 'saving' | 'error'>('saved')
   const initial = useRef(value)
   const saveRef = useRef(save)
+  const pending = useRef<{ value: T } | null>(null)
 
   useLayoutEffect(() => {
     saveRef.current = save
   })
 
+  useEffect(
+    () => () => {
+      if (pending.current) void saveRef.current(pending.current.value)
+    },
+    [],
+  )
+
   useEffect(() => {
     if (value === initial.current) return
+    pending.current = { value }
     const dirty = window.setTimeout(() => setState('dirty'), 0)
     const t = window.setTimeout(async () => {
+      pending.current = null
       setState('saving')
       try {
         await saveRef.current(value)
