@@ -1,23 +1,29 @@
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, db
+from . import __version__, db, store
 from .config import Settings, load_settings
-from .routes import prompt
+from .routes import generate, prompt, scenarios, settings as settings_routes
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, http_transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
+    """http_transport：測試時注入假的 LLM 端點。"""
     settings = settings or load_settings()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         conn = db.connect(settings.db_path)
         db.migrate(conn)
+        store.mark_stale_running(conn)
+        prompt.migrate_workspace(conn)
         app.state.db = conn
-        yield
+        async with httpx.AsyncClient(transport=http_transport, timeout=30) as http:
+            app.state.http = http
+            yield
         conn.close()
 
     app = FastAPI(title="Prompt Tester", version=__version__, lifespan=lifespan)
@@ -34,6 +40,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     app.include_router(prompt.router)
+    app.include_router(scenarios.router)
+    app.include_router(settings_routes.router)
+    app.include_router(generate.router)
     _mount_frontend(app, settings)
     return app
 
