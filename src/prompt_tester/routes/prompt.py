@@ -6,7 +6,7 @@ import sqlite3
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from .. import st_preset, store
+from .. import st_preset, store, tokens
 from ..build import BuildResult, build
 from ..entities import Scenario
 from ..macros import SUPPORTED_MACROS
@@ -91,6 +91,8 @@ def build_for(preset: Preset, scenario: Scenario, context: PreviewContext, expan
         scenario.names(),
         seed=context.seed,
         expand_macros=expand_macros,
+        card=scenario.card,
+        persona=scenario.persona,
     )
 
 
@@ -114,6 +116,23 @@ class MessageOut(BaseModel):
     sources: list[SourceOut]
 
 
+class WIEntryOut(BaseModel):
+    uid: int
+    comment: str
+    position: int
+    depth: int
+    order: int
+    reason: str
+    tokens: int
+
+
+class WorldInfoOut(BaseModel):
+    budget: int
+    used_tokens: int
+    activated: list[WIEntryOut]
+    total_entries: int
+
+
 class BuildResponse(BaseModel):
     messages: list[MessageOut]
     total_tokens: int
@@ -123,6 +142,7 @@ class BuildResponse(BaseModel):
     block_tokens: dict[str, int]
     variables: dict[str, str]
     warnings: list[str]
+    worldinfo: WorldInfoOut | None = None
 
 
 @router.post("/build")
@@ -147,6 +167,30 @@ def build_preview(req: BuildRequest, conn: sqlite3.Connection = Depends(get_db))
         block_tokens=result.block_tokens,
         variables=result.variables,
         warnings=result.warnings,
+        worldinfo=_wi_out(result, scenario),
+    )
+
+
+def _wi_out(result: BuildResult, scenario: Scenario) -> WorldInfoOut | None:
+    wi = result.worldinfo
+    if wi is None:
+        return None
+    return WorldInfoOut(
+        budget=wi.budget,
+        used_tokens=wi.used_tokens,
+        total_entries=len(scenario.card.book.entries) if scenario.card and scenario.card.book else 0,
+        activated=[
+            WIEntryOut(
+                uid=a.entry.uid,
+                comment=a.entry.comment,
+                position=a.entry.position,
+                depth=a.entry.depth,
+                order=a.entry.order,
+                reason=a.reason,
+                tokens=tokens.count(a.content),
+            )
+            for a in wi.activated
+        ],
     )
 
 

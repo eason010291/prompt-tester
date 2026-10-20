@@ -8,7 +8,7 @@
 |--------|------|------|
 | M0 | 專案骨架（FastAPI + SQLite + React/Vite） | ✅ |
 | M1 | 區塊組裝、巨集、深度注入、`messages[]` 即時預覽 | ✅ |
-| M7（部分） | SillyTavern Chat Completion 預設匯入 / 匯出 | ✅ |
+| M7（部分） | ST 預設匯入 / 匯出、角色卡（JSON / PNG）、世界書觸發、範例對話 | ✅ |
 | M2 | OpenRouter 連線、情境管理、串流生成與紀錄 | ✅ |
 | M3 | 預設版本樹（commit、分支、diff） | 下一步 |
 | M4–M6 | 金字塔批次、評語迴歸、LLM 修改（內建迴圈 / MCP / REST） | 規劃中 |
@@ -61,6 +61,8 @@ cd web && npm run lint && npm run build
 | `src/prompt_tester/macros.py` | ST 巨集子集（對照 1.18.0 新巨集引擎） |
 | `src/prompt_tester/build.py` | 組裝器（對照 ST `openai.js` / `prompt-converters.js`） |
 | `src/prompt_tester/st_preset.py` | ST 預設匯入 / 匯出 |
+| `src/prompt_tester/st_card.py` | ST 角色卡讀取 |
+| `src/prompt_tester/worldinfo.py` | 世界書觸發 |
 | `src/prompt_tester/llm.py` | OpenAI 相容串流 client |
 | `src/prompt_tester/providers.py` | 供應商金鑰與模型目錄 |
 | `src/prompt_tester/routes/` | API 路由 |

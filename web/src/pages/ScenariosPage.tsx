@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useState, type ChangeEvent } from 'react'
 import { useSearchParams } from 'react-router'
 import { api } from '../api'
+import CardSection from '../components/CardSection'
 import HistoryEditor from '../components/HistoryEditor'
 import { useAutosave, useResource } from '../hooks/useResource'
 import { newScenario, type Scenario } from '../types'
@@ -24,6 +25,28 @@ export default function ScenariosPage() {
     select(created.id!)
   }
 
+  const [notes, setNotes] = useState<{ title: string; lines: string[] } | null>(null)
+
+  const importCard = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer())
+      let binary = ''
+      for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+      const res = await api<{ scenario: Scenario; notes: string[] }>('/scenarios/import-card', {
+        method: 'POST',
+        body: JSON.stringify({ filename: file.name, data_base64: btoa(binary) }),
+      })
+      setList((cur) => [...(cur ?? []), res.scenario])
+      select(res.scenario.id!)
+      setNotes({ title: `已匯入角色卡「${res.scenario.name}」`, lines: res.notes })
+    } catch (err) {
+      setNotes({ title: '匯入失敗', lines: [err instanceof Error ? err.message : String(err)] })
+    }
+  }
+
   const remove = async (s: Scenario) => {
     if (!window.confirm(`刪除情境「${s.name}」？已產生的生成紀錄會保留情境快照。`)) return
     await api(`/scenarios/${s.id}`, { method: 'DELETE' })
@@ -43,6 +66,23 @@ export default function ScenariosPage() {
             ＋ 新增
           </button>
         </div>
+        <label className="btn btn-sm import-card" title="SillyTavern 角色卡（V2 / V3 的 JSON 或 PNG）">
+          匯入角色卡
+          <input type="file" accept=".json,.png,application/json,image/png" hidden onChange={importCard} />
+        </label>
+        {notes && (
+          <div className="alert notes" role="status">
+            <strong>{notes.title}</strong>
+            <ul>
+              {notes.lines.map((n) => (
+                <li key={n}>{n}</li>
+              ))}
+            </ul>
+            <button className="icon-btn" aria-label="關閉" onClick={() => setNotes(null)}>
+              ✕
+            </button>
+          </div>
+        )}
         {list?.map((s) => (
           <button
             key={s.id}
@@ -51,6 +91,7 @@ export default function ScenariosPage() {
           >
             <strong>{s.name}</strong>
             <small>
+              {s.card ? '🪪 ' : ''}
               {s.char} × {s.user} · {s.history.length + (s.opening ? 1 : 0)} 則歷史 · {s.user_turns.filter(Boolean).length} 回合輸入
             </small>
           </button>
@@ -145,7 +186,21 @@ function ScenarioEditor({ initial, onSaved, onDuplicate, onDelete }: EditorProps
             </label>
           </div>
           <VarsEditor vars={draft.vars} onChange={(vars) => set({ vars })} />
+          <label className="stack">
+            {'{{user}}'} 的 persona 描述（填入 personaDescription marker，可留空）
+            <textarea value={draft.persona} onChange={(e) => set({ persona: e.target.value })} />
+          </label>
         </div>
+
+        {draft.card && (
+          <CardSection
+            card={draft.card}
+            opening={draft.opening}
+            onChange={(card) => set({ card })}
+            onOpening={(opening) => set({ opening })}
+            onRemove={() => set({ card: null })}
+          />
+        )}
 
         <div className="card">
           <label className="stack">
