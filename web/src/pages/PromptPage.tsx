@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState, type ChangeEvent } from 'react'
 import { api } from '../api'
 import BlockList from '../components/BlockList'
-import ContextPanel from '../components/ContextPanel'
 import PreviewPane from '../components/PreviewPane'
+import ScenarioPicker from '../components/ScenarioPicker'
 import SettingsPanel from '../components/SettingsPanel'
+import TryRunPanel from '../components/TryRunPanel'
+import { useResource } from '../hooks/useResource'
 import { useBuild, useWorkspace, type SaveState } from '../hooks/useWorkspace'
-import type { Block, ImportResponse } from '../types'
+import type { Block, ImportResponse, Scenario } from '../types'
 
 const SAVE_LABEL: Record<SaveState, string> = {
   loading: '載入中…',
@@ -20,6 +22,8 @@ export default function PromptPage() {
   const [expandMacros, setExpandMacros] = useState(true)
   const [highlightId, setHighlightId] = useState<string | null>(null)
   const [importNotes, setImportNotes] = useState<{ title: string; lines: string[] } | null>(null)
+  const [tab, setTab] = useState<'preview' | 'run'>('preview')
+  const scenarios = useResource<Scenario[]>('/scenarios')
   const { result, error, busy } = useBuild(ws?.preset, ws?.context, expandMacros)
 
   const setBlocks = useCallback((blocks: Block[]) => setPreset((p) => ({ ...p, blocks })), [setPreset])
@@ -127,15 +131,27 @@ export default function PromptPage() {
         />
       </div>
       <aside className="preview-col">
-        <ContextPanel context={context} onChange={setContext} />
-        <PreviewPane
-          result={result}
-          error={error}
-          busy={busy}
-          expandMacros={expandMacros}
-          onExpandMacros={setExpandMacros}
-          onSourceClick={jumpTo}
-        />
+        <ScenarioPicker context={context} scenarios={scenarios.data ?? []} onChange={setContext} />
+        <div className="tabs" role="tablist" aria-label="右側面板">
+          <button role="tab" aria-selected={tab === 'preview'} onClick={() => setTab('preview')}>
+            messages[] 預覽
+          </button>
+          <button role="tab" aria-selected={tab === 'run'} onClick={() => setTab('run')}>
+            試跑
+          </button>
+        </div>
+        {tab === 'preview' ? (
+          <PreviewPane
+            result={result}
+            error={error}
+            busy={busy}
+            expandMacros={expandMacros}
+            onExpandMacros={setExpandMacros}
+            onSourceClick={jumpTo}
+          />
+        ) : (
+          <TryRunPanel preset={preset} context={context} />
+        )}
       </aside>
     </div>
   )

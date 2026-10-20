@@ -4,6 +4,8 @@ import { api, type Health } from './api'
 import { useTheme, type Theme } from './theme'
 import Placeholder from './pages/Placeholder'
 import PromptPage from './pages/PromptPage'
+import ScenariosPage from './pages/ScenariosPage'
+import SettingsPage from './pages/SettingsPage'
 
 interface Section {
   path: string
@@ -25,6 +27,13 @@ const SECTIONS: Section[] = [
       'chatHistory marker、深度注入、巨集',
       'messages[] 預覽，標示每段的來源區塊',
     ],
+  },
+  {
+    path: '/scenarios',
+    label: '情境',
+    hint: '測試輸入與歷史',
+    milestone: 'M2',
+    plans: [],
   },
   {
     path: '/versions',
@@ -50,11 +59,13 @@ const SECTIONS: Section[] = [
   {
     path: '/settings',
     label: '設定',
-    hint: '連線、模型、模板',
+    hint: '金鑰、連線、模型',
     milestone: 'M2',
     plans: ['OpenRouter 連線與供應商固定', '模型價格與支援參數', '評語佔位模板'],
   },
 ]
+
+const BUILT = new Set(['/prompt', '/scenarios', '/settings'])
 
 const THEMES: { value: Theme; label: string }[] = [
   { value: 'system', label: '系統' },
@@ -97,7 +108,9 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/prompt" replace />} />
           <Route path="/prompt" element={<PromptPage />} />
-          {SECTIONS.filter((s) => s.path !== '/prompt').map((s) => (
+          <Route path="/scenarios" element={<ScenariosPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          {SECTIONS.filter((s) => !BUILT.has(s.path)).map((s) => (
             <Route
               key={s.path}
               path={s.path}

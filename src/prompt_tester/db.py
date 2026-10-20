@@ -26,6 +26,49 @@ MIGRATIONS: list[tuple[int, str]] = [
         );
         """,
     ),
+    (
+        3,
+        # M2：情境、連線、預設快照（內容定址，M3 版本樹沿用）、單次生成紀錄
+        """
+        CREATE TABLE scenarios (
+            id         INTEGER PRIMARY KEY,
+            data       TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE connections (
+            id   INTEGER PRIMARY KEY,
+            data TEXT NOT NULL
+        );
+        CREATE TABLE preset_snapshots (
+            hash TEXT PRIMARY KEY,
+            data TEXT NOT NULL
+        );
+        CREATE TABLE generations (
+            id             INTEGER PRIMARY KEY,
+            created_at     TEXT NOT NULL,
+            status         TEXT NOT NULL,          -- running | done | error | cancelled
+            preset_name    TEXT NOT NULL,
+            preset_hash    TEXT NOT NULL REFERENCES preset_snapshots(hash),
+            scenario_id    INTEGER,
+            scenario       TEXT NOT NULL,          -- 情境快照
+            connection     TEXT NOT NULL,          -- 連線快照
+            request        TEXT NOT NULL,          -- 實際送出的 body（不含金鑰）
+            output         TEXT NOT NULL DEFAULT '',
+            reasoning      TEXT NOT NULL DEFAULT '',
+            finish_reason  TEXT,
+            usage          TEXT,
+            cost           REAL,
+            cost_source    TEXT,                   -- api | generation | estimate
+            served_by      TEXT,
+            model          TEXT,
+            remote_id      TEXT,
+            first_token_ms INTEGER,
+            latency_ms     INTEGER,
+            error          TEXT
+        );
+        CREATE INDEX generations_created ON generations(created_at DESC);
+        """,
+    ),
 ]
 
 

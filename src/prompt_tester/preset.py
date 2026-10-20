@@ -89,7 +89,16 @@ class HistoryMessage(BaseModel):
 
 
 class PreviewContext(BaseModel):
-    """M1 預覽用的簡易情境；M2 起由正式的情境（Scenario）取代。"""
+    """提示詞頁面目前選用的情境與本次輸入。"""
+
+    scenario_id: int | None = None
+    seed: int = 1
+    # 本次的使用者輸入，附加在情境歷史最後；空字串表示不附加
+    user_input: str = ""
+
+
+class LegacyPreviewContext(BaseModel):
+    """M1 存在工作區裡的內嵌情境，載入時轉成正式情境。"""
 
     char: str = "角色"
     user: str = "使用者"
@@ -119,10 +128,3 @@ def starter_preset() -> Preset:
     )
 
 
-def starter_context() -> PreviewContext:
-    return PreviewContext(
-        history=[
-            HistoryMessage(role="assistant", content="（{{char}} 抬起頭）你來了。"),
-            HistoryMessage(role="user", content="嗯，今天有點累。"),
-        ]
-    )

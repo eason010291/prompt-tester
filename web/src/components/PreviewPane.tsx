@@ -53,7 +53,7 @@ export default function PreviewPane({ result, error, busy, expandMacros, onExpan
   return (
     <section className="preview" aria-label="組裝預覽">
       <div className="preview-toolbar">
-        <h2>messages[] 預覽</h2>
+        <span className="toolbar-spacer" />
         <div className="segmented" role="group" aria-label="巨集">
           <button aria-pressed={expandMacros} onClick={() => onExpandMacros(true)}>
             展開巨集

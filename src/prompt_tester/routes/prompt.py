@@ -1,23 +1,21 @@
-"""M1：工作區（編輯中的預設）與組裝預覽。"""
+"""工作區（編輯中的預設）、組裝預覽、ST 預設匯入 / 匯出。"""
 
+import json
 import sqlite3
-from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from .. import st_preset
-from ..build import build
+from .. import st_preset, store
+from ..build import BuildResult, build
+from ..entities import Scenario
 from ..macros import SUPPORTED_MACROS
-from ..preset import Preset, PreviewContext, starter_context, starter_preset
+from ..preset import LegacyPreviewContext, Preset, PreviewContext, starter_preset
+from .deps import get_db
 
 router = APIRouter(prefix="/api")
 
 WORKSPACE_ID = 1
-
-
-def get_db(request: Request) -> sqlite3.Connection:
-    return request.app.state.db
 
 
 class Workspace(BaseModel):
@@ -26,11 +24,26 @@ class Workspace(BaseModel):
     updated_at: str | None = None
 
 
+def migrate_workspace(conn: sqlite3.Connection) -> None:
+    """啟動時執行：M1 工作區的內嵌情境轉成正式情境；沒有任何情境時建立範例情境。"""
+    row = conn.execute("SELECT context FROM workspaces WHERE id = ?", (WORKSPACE_ID,)).fetchone()
+    if row is not None:
+        raw_ctx = json.loads(row["context"])
+        if "scenario_id" not in raw_ctx:
+            legacy = LegacyPreviewContext.model_validate(raw_ctx)
+            scenario = store.save_scenario(conn, store.scenario_from_legacy(legacy))
+            context = _context_for(scenario, seed=legacy.seed)
+            with conn:
+                conn.execute("UPDATE workspaces SET context = ? WHERE id = ?", (context.model_dump_json(), WORKSPACE_ID))
+    if not store.list_scenarios(conn):
+        store.save_scenario(conn, store.starter_scenario())
+
+
 @router.get("/workspace")
 def get_workspace(conn: sqlite3.Connection = Depends(get_db)) -> Workspace:
     row = conn.execute("SELECT preset, context, updated_at FROM workspaces WHERE id = ?", (WORKSPACE_ID,)).fetchone()
     if row is None:
-        return Workspace(preset=starter_preset(), context=starter_context())
+        return Workspace(preset=starter_preset(), context=_context_for(_first_scenario(conn)))
     return Workspace(
         preset=Preset.model_validate_json(row["preset"]),
         context=PreviewContext.model_validate_json(row["context"]),
@@ -38,9 +51,18 @@ def get_workspace(conn: sqlite3.Connection = Depends(get_db)) -> Workspace:
     )
 
 
+def _first_scenario(conn: sqlite3.Connection) -> Scenario:
+    existing = store.list_scenarios(conn)
+    return existing[0] if existing else store.save_scenario(conn, store.starter_scenario())
+
+
+def _context_for(scenario: Scenario, seed: int = 1) -> PreviewContext:
+    return PreviewContext(scenario_id=scenario.id, seed=seed, user_input=scenario.user_turns[0] if scenario.user_turns else "")
+
+
 @router.put("/workspace")
 def put_workspace(ws: Workspace, conn: sqlite3.Connection = Depends(get_db)) -> Workspace:
-    ws.updated_at = datetime.now(UTC).isoformat(timespec="seconds")
+    ws.updated_at = store.now_iso()
     with conn:
         conn.execute(
             """
@@ -51,6 +73,25 @@ def put_workspace(ws: Workspace, conn: sqlite3.Connection = Depends(get_db)) -> 
             (WORKSPACE_ID, ws.preset.model_dump_json(), ws.context.model_dump_json(), ws.updated_at),
         )
     return ws
+
+
+def resolve_scenario(conn: sqlite3.Connection, context: PreviewContext) -> Scenario:
+    if context.scenario_id is None:
+        return Scenario(name="（未選情境）")
+    scenario = store.get_scenario(conn, context.scenario_id)
+    if scenario is None:
+        raise HTTPException(status_code=404, detail=f"找不到情境 #{context.scenario_id}")
+    return scenario
+
+
+def build_for(preset: Preset, scenario: Scenario, context: PreviewContext, expand_macros: bool = True) -> BuildResult:
+    return build(
+        preset,
+        scenario.chat(context.user_input),
+        scenario.names(),
+        seed=context.seed,
+        expand_macros=expand_macros,
+    )
 
 
 class BuildRequest(BaseModel):
@@ -85,16 +126,9 @@ class BuildResponse(BaseModel):
 
 
 @router.post("/build")
-def build_preview(req: BuildRequest) -> BuildResponse:
-    ctx = req.context
-    result = build(
-        req.preset,
-        ctx.history,
-        {"char": ctx.char, "user": ctx.user},
-        seed=ctx.seed,
-        expand_macros=req.expand_macros,
-    )
-
+def build_preview(req: BuildRequest, conn: sqlite3.Connection = Depends(get_db)) -> BuildResponse:
+    scenario = resolve_scenario(conn, req.context)
+    result = build_for(req.preset, scenario, req.context, req.expand_macros)
     return BuildResponse(
         messages=[
             MessageOut(
