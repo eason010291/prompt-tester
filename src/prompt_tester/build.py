@@ -232,10 +232,18 @@ def build(
     if wi:
         raw_blocks = [b for t in wi.em_top for b in parse_mes_examples(expand(t))] + raw_blocks
         raw_blocks += [b for t in wi.em_bottom for b in parse_mes_examples(expand(t))]
-    for blk_text in raw_blocks:
+    no_char_lines = []
+    for i, blk_text in enumerate(raw_blocks):
         msgs = parse_example_block(blk_text, names.get("user", ""), names.get("char", ""))
         if msgs:
             example_blocks.append(msgs)
+            if not any(m.name == "example_assistant" for m in msgs):
+                no_char_lines.append(i + 1)
+    if no_char_lines:
+        ctx.warnings.append(
+            f"範例對話第 {'、'.join(map(str, no_char_lines))} 段沒有辨識到角色台詞，全部會被當成 {{{{user}}}} 的話。"
+            f"ST 只認「{names.get('char', '')}:」開頭（角色名 + 半形冒號），建議寫成 {{{{char}}}}:。"
+        )
 
     history_marker = next(
         (b for b in preset.blocks if b.kind == "marker" and b.marker == "chatHistory" and b.enabled),

@@ -136,3 +136,10 @@ def test_wi_depth_entries_join_card_depth_prompt():
     r = build(card_preset(), [HistoryMessage(role="user", content="嗨")], {"char": "露", "user": "藍"}, card=card)
     # 同深度、同角色：依 key 字母順序 DEPTH_PROMPT < customDepthWI_0_0，以 \n 合併
     assert r.messages[-1].content == "角色提示\n世界書深度"
+
+
+def test_warns_when_examples_have_no_character_lines():
+    card = CharacterCard(name="唐心桃｜小惡魔", mes_example="<START>\n{{user}}: 你好\n唐心桃：「全形冒號」")
+    r = build(card_preset(), [], {"char": "唐心桃｜小惡魔", "user": "藍"}, card=card)
+    assert [m.name for m in r.messages if m.name] == ["example_user"]
+    assert any("沒有辨識到角色台詞" in w and "半形冒號" in w for w in r.warnings)
