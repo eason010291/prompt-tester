@@ -214,6 +214,16 @@ export default function TryRunPanel({ preset, context }: Props) {
         </div>
       )}
 
+      {g?.finish_reason === 'length' && (
+        <p className="alert">
+          {live.output ? '回覆被 max_tokens 截斷' : '推理用完了 max_tokens，沒有產生正文'}
+          {usage?.completion_tokens_details?.reasoning_tokens
+            ? `（輸出 ${usage.completion_tokens?.toLocaleString()} tokens 中推理佔 ${usage.completion_tokens_details.reasoning_tokens.toLocaleString()}）`
+            : ''}
+          。推理型模型的推理 token 也計入上限：可提高「回覆上限」，或在連線設定調低推理強度。
+        </p>
+      )}
+
       {g && (
         <dl className="gen-stats">
           <div>
