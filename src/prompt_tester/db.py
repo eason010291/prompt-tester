@@ -103,6 +103,54 @@ MIGRATIONS: list[tuple[int, str]] = [
         ALTER TABLE generations ADD COLUMN commit_id TEXT;
         """,
     ),
+    (
+        5,
+        # 多回合試跑：LLM 扮演 {{user}}（即時）或回放舊紀錄
+        """
+        CREATE TABLE runs (
+            id              INTEGER PRIMARY KEY,
+            created_at      TEXT NOT NULL,
+            status          TEXT NOT NULL,       -- running | done | error | cancelled
+            mode            TEXT NOT NULL,       -- live | replay
+            replay_of       INTEGER,
+            turns           INTEGER NOT NULL,
+            seed            INTEGER NOT NULL,
+            preset_name     TEXT NOT NULL,
+            preset_hash     TEXT NOT NULL REFERENCES preset_snapshots(hash),
+            commit_id       TEXT,
+            scenario_id     INTEGER,
+            scenario        TEXT NOT NULL,
+            connection      TEXT NOT NULL,
+            user_connection TEXT,
+            user_settings   TEXT,
+            cost            REAL,
+            checks          TEXT,
+            error           TEXT
+        );
+        CREATE INDEX runs_scenario ON runs(scenario_id, id DESC);
+        CREATE TABLE run_messages (
+            id             INTEGER PRIMARY KEY,
+            run_id         INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+            idx            INTEGER NOT NULL,
+            turn           INTEGER NOT NULL,
+            role           TEXT NOT NULL,        -- user | assistant
+            source         TEXT NOT NULL,        -- scenario | llm_user | replay | replay_fallback | char
+            content        TEXT NOT NULL,
+            reasoning      TEXT NOT NULL DEFAULT '',
+            usage          TEXT,
+            cost           REAL,
+            cost_source    TEXT,
+            served_by      TEXT,
+            model          TEXT,
+            first_token_ms INTEGER,
+            latency_ms     INTEGER,
+            finish_reason  TEXT,
+            error          TEXT,
+            request        TEXT
+        );
+        CREATE INDEX run_messages_run ON run_messages(run_id, idx);
+        """,
+    ),
 ]
 
 

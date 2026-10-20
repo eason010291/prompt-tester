@@ -176,6 +176,7 @@ export interface Scenario {
   user_turns: string[]
   notes: string
   persona: string
+  user_goal: string
   card: CharacterCard | null
   updated_at: string | null
 }
@@ -351,6 +352,7 @@ export function newScenario(partial: Partial<Scenario> = {}): Scenario {
     user_turns: [''],
     notes: '',
     persona: '',
+    user_goal: '',
     card: null,
     updated_at: null,
     ...partial,
@@ -435,3 +437,72 @@ export function authorLabel(author: string): string {
   if (author.startsWith('agent:')) return `外部 · ${author.slice(6)}`
   return author
 }
+
+// ---- 多回合試跑（LLM 扮演 {{user}}） ----
+
+export interface UserSimSettings {
+  connection_id: number | null
+  template: string
+  temperature: number
+  max_tokens: number
+  context_messages: number
+  strip_markup: boolean
+  reasoning_effort: ReasoningEffort | null
+}
+
+export type RunSource = 'scenario' | 'llm_user' | 'replay' | 'replay_fallback' | 'char'
+
+export interface RunMessage {
+  id: number
+  run_id: number
+  idx: number
+  turn: number
+  role: 'user' | 'assistant'
+  source: RunSource
+  content: string
+  reasoning: string
+  usage: Usage | null
+  cost: number | null
+  served_by: string | null
+  model: string | null
+  latency_ms: number | null
+  finish_reason: string | null
+  error: string | null
+}
+
+export interface RunChecks {
+  build_warnings: string[]
+  issues: { turn: number; role: 'user' | 'assistant'; message: string }[]
+}
+
+export interface RunSummary {
+  id: number
+  created_at: string
+  status: 'running' | 'done' | 'error' | 'cancelled'
+  mode: 'live' | 'replay'
+  replay_of: number | null
+  turns: number
+  seed: number
+  preset_name: string
+  commit_id: string | null
+  scenario_id: number | null
+  cost: number | null
+  checks: RunChecks | null
+  error: string | null
+  connection_name: string | null
+  user_connection_name: string | null
+  replies: number
+}
+
+export interface Run extends Omit<RunSummary, 'connection_name' | 'user_connection_name' | 'replies'> {
+  scenario: Scenario
+  messages: RunMessage[]
+}
+
+export type RunEvent =
+  | { type: 'start'; run_id: number; turns: number; history: HistoryMessage[] }
+  | { type: 'message_start'; turn: number; role: 'user' | 'assistant' }
+  | { type: 'content' | 'reasoning'; text: string }
+  | { type: 'meta'; provider: string | null }
+  | { type: 'message_done'; message: RunMessage }
+  | { type: 'done'; run: Run }

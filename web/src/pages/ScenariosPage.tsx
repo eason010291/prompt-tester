@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router'
 import { api } from '../api'
 import CardSection from '../components/CardSection'
 import HistoryEditor from '../components/HistoryEditor'
+import ScenarioTrial from '../components/ScenarioTrial'
 import { useAutosave, useResource } from '../hooks/useResource'
 import { newScenario, type Scenario } from '../types'
 
@@ -26,6 +27,7 @@ export default function ScenariosPage() {
   }
 
   const [notes, setNotes] = useState<{ title: string; lines: string[] } | null>(null)
+  const [justImported, setJustImported] = useState<number | null>(null)
 
   const importCard = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -41,6 +43,7 @@ export default function ScenariosPage() {
       })
       setList((cur) => [...(cur ?? []), res.scenario])
       select(res.scenario.id!)
+      setJustImported(res.scenario.id)
       setNotes({ title: `已匯入角色卡「${res.scenario.name}」`, lines: res.notes })
     } catch (err) {
       setNotes({ title: '匯入失敗', lines: [err instanceof Error ? err.message : String(err)] })
@@ -106,6 +109,7 @@ export default function ScenariosPage() {
           onSaved={onSaved}
           onDuplicate={create}
           onDelete={remove}
+          suggestPreflight={justImported === selected.id}
         />
       )}
     </div>
@@ -150,9 +154,10 @@ interface EditorProps {
   onSaved: (s: Scenario) => void
   onDuplicate: (s: Scenario) => void
   onDelete: (s: Scenario) => void
+  suggestPreflight: boolean
 }
 
-function ScenarioEditor({ initial, onSaved, onDuplicate, onDelete }: EditorProps) {
+function ScenarioEditor({ initial, onSaved, onDuplicate, onDelete, suggestPreflight }: EditorProps) {
   const [draft, setDraft] = useState(initial)
   const state = useAutosave(draft, async (s) => {
     onSaved(await api<Scenario>(`/scenarios/${s.id}`, { method: 'PUT', body: JSON.stringify(s) }))
@@ -187,8 +192,16 @@ function ScenarioEditor({ initial, onSaved, onDuplicate, onDelete }: EditorProps
           </div>
           <VarsEditor vars={draft.vars} onChange={(vars) => set({ vars })} />
           <label className="stack">
-            {'{{user}}'} 的 persona 描述（填入 personaDescription marker，可留空）
+            {'{{user}}'} 的人設（填入 personaDescription marker，也是模擬使用者的人設）
             <textarea value={draft.persona} onChange={(e) => set({ persona: e.target.value })} />
+          </label>
+          <label className="stack">
+            {'{{user}}'} 在這段劇情中的目標（只給模擬使用者，不送給角色模型）
+            <textarea
+              value={draft.user_goal}
+              placeholder="例如：想約對方週末出遊；慢慢試探對方的過去"
+              onChange={(e) => set({ user_goal: e.target.value })}
+            />
           </label>
         </div>
 
@@ -242,6 +255,8 @@ function ScenarioEditor({ initial, onSaved, onDuplicate, onDelete }: EditorProps
             <textarea value={draft.notes} onChange={(e) => set({ notes: e.target.value })} />
           </label>
         </div>
+
+        <ScenarioTrial scenario={draft} saved={state === 'saved'} suggestPreflight={suggestPreflight} />
       </section>
   )
 }

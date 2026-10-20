@@ -186,7 +186,170 @@ def delete_generation(conn: sqlite3.Connection, gid: int) -> None:
 
 
 def mark_stale_running(conn: sqlite3.Connection) -> None:
-    """伺服器重啟時，把上次沒有結束的生成標成中斷。"""
+    """伺服器重啟時，把上次沒有結束的生成與試跑標成中斷。"""
     with conn:
         conn.execute("UPDATE generations SET status = 'cancelled', error = '伺服器重啟時中斷' WHERE status = 'running'")
+        conn.execute("UPDATE runs SET status = 'cancelled', error = '伺服器重啟時中斷' WHERE status = 'running'")
 
+
+# ---- 鍵值設定 ----
+
+def get_setting(conn: sqlite3.Connection, key: str) -> dict | None:
+    row = conn.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
+    return json.loads(row["value"]) if row else None
+
+
+def set_setting(conn: sqlite3.Connection, key: str, value: dict) -> None:
+    with conn:
+        conn.execute(
+            "INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, json.dumps(value, ensure_ascii=False)),
+        )
+
+
+# ---- 多回合試跑 ----
+
+def create_run(
+    conn: sqlite3.Connection,
+    *,
+    mode: str,
+    replay_of: int | None,
+    turns: int,
+    seed: int,
+    preset: Preset,
+    preset_hash: str,
+    commit_id: str | None,
+    scenario: Scenario,
+    connection: Connection,
+    user_connection: Connection | None,
+    user_settings: dict | None,
+) -> int:
+    with conn:
+        return conn.execute(
+            """INSERT INTO runs (created_at, status, mode, replay_of, turns, seed, preset_name, preset_hash, commit_id,
+                                 scenario_id, scenario, connection, user_connection, user_settings)
+               VALUES (?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                now_iso(),
+                mode,
+                replay_of,
+                turns,
+                seed,
+                preset.name,
+                preset_hash,
+                commit_id,
+                scenario.id,
+                scenario.model_dump_json(),
+                connection.model_dump_json(),
+                user_connection.model_dump_json() if user_connection else None,
+                json.dumps(user_settings, ensure_ascii=False) if user_settings is not None else None,
+            ),
+        ).lastrowid
+
+
+def add_run_message(
+    conn: sqlite3.Connection,
+    run_id: int,
+    *,
+    idx: int,
+    turn: int,
+    role: str,
+    source: str,
+    content: str,
+    result,
+    request: dict | None,
+) -> dict:
+    r = result
+    with conn:
+        mid = conn.execute(
+            """INSERT INTO run_messages (run_id, idx, turn, role, source, content, reasoning, usage, cost, cost_source,
+                                         served_by, model, first_token_ms, latency_ms, finish_reason, error, request)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                run_id,
+                idx,
+                turn,
+                role,
+                source,
+                content,
+                r.reasoning if r else "",
+                json.dumps(r.usage) if r and r.usage else None,
+                r.cost if r else None,
+                r.cost_source if r else None,
+                r.served_by if r else None,
+                r.model if r else None,
+                r.first_token_ms if r else None,
+                r.latency_ms if r else None,
+                r.finish_reason if r else None,
+                r.error if r else None,
+                json.dumps(request, ensure_ascii=False) if request else None,
+            ),
+        ).lastrowid
+    row = conn.execute("SELECT * FROM run_messages WHERE id = ?", (mid,)).fetchone()
+    return _run_message(row, with_request=False)
+
+
+def _run_message(row, with_request: bool) -> dict:
+    d = dict(row)
+    d["usage"] = json.loads(d["usage"]) if d["usage"] else None
+    if with_request:
+        d["request"] = json.loads(d["request"]) if d["request"] else None
+    else:
+        d.pop("request", None)
+    return d
+
+
+def finish_run(conn: sqlite3.Connection, run_id: int, *, status: str, error: str | None, cost: float, checks: dict) -> None:
+    with conn:
+        conn.execute(
+            "UPDATE runs SET status = ?, error = ?, cost = ?, checks = ? WHERE id = ?",
+            (status, error, cost, json.dumps(checks, ensure_ascii=False), run_id),
+        )
+
+
+def list_runs(conn: sqlite3.Connection, scenario_id: int | None = None, limit: int = 30) -> list[dict]:
+    sql = """SELECT r.id, r.created_at, r.status, r.mode, r.replay_of, r.turns, r.seed, r.preset_name, r.commit_id,
+                    r.scenario_id, r.cost, r.checks, r.error,
+                    json_extract(r.connection, '$.name') AS connection_name,
+                    json_extract(r.user_connection, '$.name') AS user_connection_name,
+                    (SELECT COUNT(*) FROM run_messages m WHERE m.run_id = r.id AND m.role = 'assistant') AS replies
+             FROM runs r"""
+    args: tuple = ()
+    if scenario_id is not None:
+        sql += " WHERE r.scenario_id = ?"
+        args = (scenario_id,)
+    sql += " ORDER BY r.id DESC LIMIT ?"
+    out = []
+    for row in conn.execute(sql, (*args, limit)).fetchall():
+        d = dict(row)
+        d["checks"] = json.loads(d["checks"]) if d["checks"] else None
+        out.append(d)
+    return out
+
+
+def get_run(conn: sqlite3.Connection, run_id: int, with_requests: bool = False) -> dict | None:
+    row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+    if row is None:
+        return None
+    d = dict(row)
+    for key in ("scenario", "connection", "user_connection", "user_settings", "checks"):
+        if d.get(key):
+            d[key] = json.loads(d[key])
+    d["messages"] = [
+        _run_message(m, with_requests)
+        for m in conn.execute("SELECT * FROM run_messages WHERE run_id = ? ORDER BY idx", (run_id,)).fetchall()
+    ]
+    return d
+
+
+def run_user_turns(conn: sqlite3.Connection, run_id: int) -> list[str]:
+    rows = conn.execute(
+        "SELECT content FROM run_messages WHERE run_id = ? AND role = 'user' ORDER BY turn", (run_id,)
+    ).fetchall()
+    return [r["content"] for r in rows]
+
+
+def delete_run(conn: sqlite3.Connection, run_id: int) -> None:
+    with conn:
+        conn.execute("DELETE FROM run_messages WHERE run_id = ?", (run_id,))
+        conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
