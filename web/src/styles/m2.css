@@ -696,3 +696,32 @@ textarea.tall {
 .lore-table textarea {
   min-height: 6lh;
 }
+
+/* ---- ST 渲染 ---- */
+
+.render-opts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px var(--s-sm);
+  font-size: 12px;
+}
+
+.render-opts label.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.st-frame {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+}
+
+.applied {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}

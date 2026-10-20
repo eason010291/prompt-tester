@@ -150,7 +150,11 @@ export default function PromptPage() {
             onSourceClick={jumpTo}
           />
         ) : (
-          <TryRunPanel preset={preset} context={context} />
+          <TryRunPanel
+            preset={preset}
+            context={context}
+            scenario={scenarios.data?.find((s) => s.id === context.scenario_id) ?? null}
+          />
         )}
       </aside>
     </div>
