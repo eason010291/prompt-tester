@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { api } from '../api'
 import { formatCost, useResource } from '../hooks/useResource'
@@ -121,15 +121,21 @@ function RoundView({ id, onChanged }: { id: number; onChanged: () => void }) {
   const round = useResource<AgentRound>(`/agent/rounds/${id}`)
   const r = round.data
   const { reload } = round
+  const status = r?.status
+  // 狀態改變（例如修改結束）時通知外層重新整理列表；用 ref 避免外層每次重繪都觸發
+  const onChangedRef = useRef(onChanged)
+  useLayoutEffect(() => {
+    onChangedRef.current = onChanged
+  })
 
   useEffect(() => {
-    if (r?.status !== 'running') {
-      if (r) onChanged()
+    if (status !== 'running') {
+      if (status) onChangedRef.current()
       return
     }
     const t = window.setInterval(reload, 1500)
     return () => window.clearInterval(t)
-  }, [r?.status, reload]) // onChanged 只在狀態改變時通知，不列入依賴
+  }, [status, reload])
 
   if (!r) return <p className="muted">載入中…</p>
   const act = async (path: string) => {

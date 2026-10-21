@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { api } from '../api'
 import ExperimentView from '../components/ExperimentView'
-import { scoreLevel } from '../components/FeedbackBox'
+import { scoreLevel } from '../lib/runs'
 import RunCompare from '../components/RunCompare'
 import { formatCost, useResource } from '../hooks/useResource'
 import {

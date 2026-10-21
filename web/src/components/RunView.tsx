@@ -4,7 +4,8 @@ import { formatCost, useResource } from '../hooks/useResource'
 import FeedbackBox from './FeedbackBox'
 import ProbeDialog from './ProbeDialog'
 import RetryDialog, { type RetryRequest } from './RetryDialog'
-import { MessageList, withDepth } from './RunCompare'
+import { withDepth } from '../lib/runs'
+import { MessageList } from './RunCompare'
 import type { ArchivedMessage, ExperimentDetail, Feedback, Preset, RetryResult, Run, RunMessage } from '../types'
 
 /** 實驗裡的重試設定（由實驗頁決定） */
