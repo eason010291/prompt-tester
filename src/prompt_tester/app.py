@@ -5,9 +5,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, db, store
+from . import __version__, db, experiments, scripts, store
 from .config import Settings, load_settings
-from .routes import feedback, generate, prompt, runs, scenarios, settings as settings_routes, vcs as vcs_routes
+from .routes import experiments as experiment_routes, feedback, generate, prompt, runs, scenarios, settings as settings_routes, vcs as vcs_routes
 
 
 def create_app(settings: Settings | None = None, http_transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
@@ -20,10 +20,13 @@ def create_app(settings: Settings | None = None, http_transport: httpx.AsyncBase
         db.migrate(conn)
         store.mark_stale_running(conn)
         prompt.migrate_workspace(conn)
+        scripts.ensure_starter(conn)
         app.state.db = conn
         async with httpx.AsyncClient(transport=http_transport, timeout=30) as http:
             app.state.http = http
+            app.state.experiments = experiments.Manager(conn, http)
             yield
+            await app.state.experiments.shutdown()
         conn.close()
 
     app = FastAPI(title="Prompt Tester", version=__version__, lifespan=lifespan)
@@ -46,6 +49,7 @@ def create_app(settings: Settings | None = None, http_transport: httpx.AsyncBase
     app.include_router(vcs_routes.router)
     app.include_router(runs.router)
     app.include_router(feedback.router)
+    app.include_router(experiment_routes.router)
     _mount_frontend(app, settings)
     return app
 

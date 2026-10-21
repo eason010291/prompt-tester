@@ -169,6 +169,46 @@ MIGRATIONS: list[tuple[int, str]] = [
         CREATE INDEX feedback_run ON feedback(run_id);
         """,
     ),
+    (
+        7,
+        # M4：腳本繼承樹、金字塔實驗。每條分支是一筆 run，晉級後的接續以 parent_run_id 串成對話樹
+        """
+        CREATE TABLE scripts (
+            id         INTEGER PRIMARY KEY,
+            name       TEXT NOT NULL,
+            parent_id  INTEGER REFERENCES scripts(id),
+            overrides  TEXT NOT NULL,          -- {"stages[0].seeds": 6, ...}
+            notes      TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE experiments (
+            id              INTEGER PRIMARY KEY,
+            created_at      TEXT NOT NULL,
+            name            TEXT NOT NULL,
+            status          TEXT NOT NULL,     -- running | waiting | done | cancelled
+            current_stage   INTEGER NOT NULL DEFAULT 0,
+            preset_name     TEXT NOT NULL,
+            preset_hash     TEXT NOT NULL REFERENCES preset_snapshots(hash),
+            commit_id       TEXT,
+            script_id       INTEGER,
+            script_name     TEXT NOT NULL,
+            script_snapshot TEXT NOT NULL,     -- 解析後的完整腳本
+            script_hash     TEXT NOT NULL,
+            scenario_ids    TEXT NOT NULL,
+            connection_id   INTEGER NOT NULL,
+            rerun_of        INTEGER,
+            state           TEXT NOT NULL DEFAULT '{}',   -- 各階段的評審結果等
+            cost            REAL NOT NULL DEFAULT 0,
+            error           TEXT
+        );
+        ALTER TABLE runs ADD COLUMN experiment_id INTEGER;
+        ALTER TABLE runs ADD COLUMN stage INTEGER;
+        ALTER TABLE runs ADD COLUMN parent_run_id INTEGER;
+        ALTER TABLE runs ADD COLUMN temperature REAL;
+        ALTER TABLE runs ADD COLUMN promoted INTEGER NOT NULL DEFAULT 0;
+        CREATE INDEX runs_experiment ON runs(experiment_id, stage);
+        """,
+    ),
 ]
 
 

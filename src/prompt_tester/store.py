@@ -190,7 +190,8 @@ def mark_stale_running(conn: sqlite3.Connection) -> None:
     """伺服器重啟時，把上次沒有結束的生成與試跑標成中斷。"""
     with conn:
         conn.execute("UPDATE generations SET status = 'cancelled', error = '伺服器重啟時中斷' WHERE status = 'running'")
-        conn.execute("UPDATE runs SET status = 'cancelled', error = '伺服器重啟時中斷' WHERE status = 'running'")
+        conn.execute("UPDATE runs SET status = 'cancelled', error = '伺服器重啟時中斷' WHERE status IN ('running', 'queued')")
+        conn.execute("UPDATE experiments SET status = 'cancelled', error = '伺服器重啟時中斷' WHERE status = 'running'")
 
 
 # ---- 鍵值設定 ----
@@ -224,14 +225,21 @@ def create_run(
     connection: Connection,
     user_connection: Connection | None,
     user_settings: dict | None,
+    status: str = "running",
+    experiment_id: int | None = None,
+    stage: int | None = None,
+    parent_run_id: int | None = None,
+    temperature: float | None = None,
 ) -> int:
     with conn:
         return conn.execute(
             """INSERT INTO runs (created_at, status, mode, replay_of, turns, seed, preset_name, preset_hash, commit_id,
-                                 scenario_id, scenario, connection, user_connection, user_settings)
-               VALUES (?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                 scenario_id, scenario, connection, user_connection, user_settings,
+                                 experiment_id, stage, parent_run_id, temperature)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 now_iso(),
+                status,
                 mode,
                 replay_of,
                 turns,
@@ -244,6 +252,10 @@ def create_run(
                 connection.model_dump_json(),
                 user_connection.model_dump_json() if user_connection else None,
                 json.dumps(user_settings, ensure_ascii=False) if user_settings is not None else None,
+                experiment_id,
+                stage,
+                parent_run_id,
+                temperature,
             ),
         ).lastrowid
 
@@ -308,18 +320,36 @@ def finish_run(conn: sqlite3.Connection, run_id: int, *, status: str, error: str
         )
 
 
-def list_runs(conn: sqlite3.Connection, scenario_id: int | None = None, limit: int = 30) -> list[dict]:
-    sql = """SELECT r.id, r.created_at, r.status, r.mode, r.replay_of, r.turns, r.seed, r.preset_name, r.preset_hash,
+RUN_SUMMARY = """SELECT r.id, r.created_at, r.status, r.mode, r.replay_of, r.turns, r.seed, r.preset_name, r.preset_hash,
                     r.commit_id, r.scenario_id, json_extract(r.scenario, '$.name') AS scenario_name, r.cost, r.checks, r.error,
                     json_extract(r.connection, '$.name') AS connection_name,
                     json_extract(r.user_connection, '$.name') AS user_connection_name,
-                    (SELECT COUNT(*) FROM run_messages m WHERE m.run_id = r.id AND m.role = 'assistant') AS replies
+                    r.experiment_id, r.stage, r.parent_run_id, r.temperature, r.promoted,
+                    (SELECT COUNT(*) FROM run_messages m WHERE m.run_id = r.id AND m.role = 'assistant') AS replies,
+                    (SELECT MAX(turn) FROM run_messages m WHERE m.run_id = r.id AND m.role = 'assistant'
+                       AND m.error IS NULL) AS last_turn
              FROM runs r"""
-    args: tuple = ()
+
+
+def list_runs(
+    conn: sqlite3.Connection,
+    scenario_id: int | None = None,
+    limit: int = 30,
+    *,
+    experiment_id: int | None = None,
+    standalone: bool = False,
+) -> list[dict]:
+    """standalone：只列不屬於實驗的試跑（情境頁用）。"""
+    where, args = [], []
     if scenario_id is not None:
-        sql += " WHERE r.scenario_id = ?"
-        args = (scenario_id,)
-    sql += " ORDER BY r.id DESC LIMIT ?"
+        where.append("r.scenario_id = ?")
+        args.append(scenario_id)
+    if experiment_id is not None:
+        where.append("r.experiment_id = ?")
+        args.append(experiment_id)
+    if standalone:
+        where.append("r.experiment_id IS NULL")
+    sql = RUN_SUMMARY + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY r.id DESC LIMIT ?"
     out = []
     for row in conn.execute(sql, (*args, limit)).fetchall():
         d = dict(row)

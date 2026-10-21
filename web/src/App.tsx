@@ -10,6 +10,7 @@ const ScenariosPage = lazy(() => import('./pages/ScenariosPage'))
 const SettingsPage = lazy(() => import('./pages/SettingsPage'))
 const VersionsPage = lazy(() => import('./pages/VersionsPage'))
 const ExperimentsPage = lazy(() => import('./pages/ExperimentsPage'))
+const ScriptsPage = lazy(() => import('./pages/ScriptsPage'))
 
 interface Section {
   path: string
@@ -56,7 +57,7 @@ const SECTIONS: Section[] = [
   {
     path: '/experiments',
     label: '實驗',
-    hint: '評語、並排比較',
+    hint: '金字塔批次、評語、比較',
     milestone: 'M4–M6',
     plans: ['對話樹與晉級挑選', '自由評語與分數解析', '父子版本並排比較', '依評語由 LLM 修改'],
   },
@@ -69,7 +70,7 @@ const SECTIONS: Section[] = [
   },
 ]
 
-const BUILT = new Set(['/prompt', '/scenarios', '/settings', '/versions', '/experiments'])
+const BUILT = new Set(['/prompt', '/scenarios', '/settings', '/versions', '/experiments', '/scripts'])
 
 const THEMES: { value: Theme; label: string }[] = [
   { value: 'system', label: '系統' },
@@ -117,6 +118,7 @@ export default function App() {
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/versions" element={<VersionsPage />} />
             <Route path="/experiments" element={<ExperimentsPage />} />
+            <Route path="/scripts" element={<ScriptsPage />} />
             {SECTIONS.filter((s) => !BUILT.has(s.path)).map((s) => (
               <Route
                 key={s.path}

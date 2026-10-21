@@ -6,6 +6,7 @@ import {
   newConnection,
   type Connection,
   type EndpointInfo,
+  type JudgeSettings,
   type ModelInfo,
   type ProviderInfo,
   type ReasoningEffort,
@@ -88,6 +89,7 @@ export default function SettingsPage() {
       </section>
 
       <UserSimCard connections={connections.data ?? []} onQuickAdd={() => add(QUICK_ADD[0].conn, false)} />
+      <JudgeCard connections={connections.data ?? []} />
       <FeedbackTemplateCard />
     </div>
   )
@@ -587,6 +589,73 @@ function FeedbackTemplateForm({ initial }: { initial: string }) {
           還原預設模板
         </button>
       </div>
+    </section>
+  )
+}
+
+function JudgeCard({ connections }: { connections: Connection[] }) {
+  const { data } = useResource<JudgeSettings>('/judge')
+  return data ? <JudgeForm initial={data} connections={connections} /> : null
+}
+
+function JudgeForm({ initial, connections }: { initial: JudgeSettings; connections: Connection[] }) {
+  const [s, setS] = useState(initial)
+  const state = useAutosave(s, (v) => api('/judge', { method: 'PUT', body: JSON.stringify(v) }))
+  const set = (patch: Partial<JudgeSettings>) => setS((x) => ({ ...x, ...patch }))
+
+  return (
+    <section className="card">
+      <div className="list-head">
+        <h2>評審（LLM 預選晉級）</h2>
+        <span className={`save-state save-${state}`}>{SAVE_LABEL[state]}</span>
+      </div>
+      <p className="muted small">
+        腳本階段設為「LLM 評審預選」時，階段結束後由評審依下方標準排序同一情境的分支並預先勾選，你確認後才晉級。評審會看到回覆原文（含格式）與你寫的評語。
+      </p>
+      <div className="form-grid">
+        <label>
+          連線
+          <select value={s.connection_id ?? ''} onChange={(e) => set({ connection_id: Number(e.target.value) || null })}>
+            <option value="">沿用實驗的角色連線</option>
+            {connections.map((c) => (
+              <option key={c.id} value={c.id!}>
+                {c.name}（{c.model || '未選模型'}）
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          temperature
+          <input type="number" step={0.05} min={0} max={2} value={s.temperature} onChange={(e) => set({ temperature: Number(e.target.value) })} />
+        </label>
+        <label>
+          回覆上限（含推理）
+          <input type="number" step={500} min={200} value={s.max_tokens} onChange={(e) => set({ max_tokens: Number(e.target.value) })} />
+        </label>
+        <label>
+          每則回覆最多給評審看幾字
+          <input type="number" step={500} min={200} value={s.max_chars} onChange={(e) => set({ max_chars: Number(e.target.value) })} />
+        </label>
+        <label>
+          推理強度
+          <select
+            value={s.reasoning_effort ?? 'inherit'}
+            onChange={(e) => set({ reasoning_effort: e.target.value === 'inherit' ? null : (e.target.value as ReasoningEffort) })}
+          >
+            <option value="inherit">沿用連線設定</option>
+            <option value="">不送（模型預設）</option>
+            {['none', 'minimal', 'low', 'medium', 'high'].map((v) => (
+              <option key={v} value={v}>
+                {v}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <label className="stack">
+        挑選標準
+        <textarea className="tall" value={s.criteria} onChange={(e) => set({ criteria: e.target.value })} />
+      </label>
     </section>
   )
 }

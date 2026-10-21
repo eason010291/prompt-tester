@@ -481,7 +481,7 @@ export interface RunChecks {
 export interface RunSummary {
   id: number
   created_at: string
-  status: 'running' | 'done' | 'error' | 'cancelled'
+  status: 'queued' | 'running' | 'done' | 'error' | 'cancelled'
   mode: 'live' | 'replay'
   replay_of: number | null
   turns: number
@@ -499,10 +499,18 @@ export interface RunSummary {
   replies: number
   /** 評語分數的整體平均 */
   score: number | null
+  /** 屬於金字塔實驗時的位置 */
+  experiment_id: number | null
+  stage: number | null
+  parent_run_id: number | null
+  temperature: number | null
+  promoted: number
+  /** 最後完成的全域回合 */
+  last_turn: number | null
 }
 
 export interface Run
-  extends Omit<RunSummary, 'scenario_name' | 'connection_name' | 'user_connection_name' | 'replies' | 'score'> {
+  extends Omit<RunSummary, 'scenario_name' | 'connection_name' | 'user_connection_name' | 'replies' | 'score' | 'last_turn'> {
   scenario: Scenario
   messages: RunMessage[]
 }
@@ -547,3 +555,117 @@ export interface RunCompare {
 }
 
 export const formatScore = (v: number | null | undefined) => (v == null ? '—' : Number.isInteger(v) ? String(v) : v.toFixed(1))
+
+// ---- 腳本與金字塔實驗（M4） ----
+
+export type PromoteMode = 'manual' | 'llm_assist' | 'top_k' | 'all' | 'restart'
+export type UserSource = 'scenario_first' | 'scenario_all' | 'llm'
+
+export interface Stage {
+  name: string
+  /** 累計回合數：本階段結束時對話的總回合數 */
+  turns: number
+  /** 每個起點長出幾條分支 */
+  seeds: number
+  temperatures: number[]
+  promote: { mode: PromoteMode; k: number }
+}
+
+export interface ScriptData {
+  stages: Stage[]
+  user_source: UserSource
+  concurrency: number
+}
+
+export interface Script {
+  id: number
+  name: string
+  parent_id: number | null
+  overrides: Record<string, unknown>
+  notes: string
+  updated_at: string | null
+  resolved: ScriptData
+  warnings: string[]
+  error: string | null
+}
+
+export interface JudgeSettings {
+  connection_id: number | null
+  criteria: string
+  temperature: number
+  max_tokens: number
+  reasoning_effort: ReasoningEffort | null
+  max_chars: number
+}
+
+export type ExperimentStatus = 'running' | 'waiting' | 'done' | 'cancelled'
+
+export interface ExperimentSummary {
+  id: number
+  created_at: string
+  name: string
+  status: ExperimentStatus
+  current_stage: number
+  stage_count: number
+  preset_name: string
+  commit_id: string | null
+  script_name: string
+  rerun_of: number | null
+  runs: number
+  cost: number
+  score: number | null
+}
+
+export interface ExpRun extends RunSummary {
+  experiment_id: number
+  stage: number
+  excerpt: string
+  counterpart: number | null
+}
+
+export interface JudgeResult {
+  picks: Record<string, { pick: boolean; rank: number; reason: string }>
+  criteria?: string
+  model?: string
+  cost?: number
+  error: string | null
+  at?: string
+}
+
+export interface ExperimentDetail {
+  id: number
+  created_at: string
+  name: string
+  status: ExperimentStatus
+  current_stage: number
+  preset_name: string
+  preset_hash: string
+  commit_id: string | null
+  script_id: number | null
+  script_name: string
+  script_snapshot: ScriptData
+  script_hash: string
+  scenario_ids: number[]
+  connection_id: number
+  rerun_of: number | null
+  state: { judge?: Record<string, JudgeResult>; judge_cost?: number }
+  error: string | null
+  runs: ExpRun[]
+  cost: number
+  scenarios: Record<string, string>
+  origin_promoted?: number[]
+}
+
+export const PROMOTE_LABEL: Record<PromoteMode, string> = {
+  manual: '人工挑選',
+  llm_assist: 'LLM 評審預選',
+  top_k: '分數前 K',
+  all: '全部晉級',
+  restart: '從開場重跑',
+}
+
+export const USER_SOURCE_LABEL: Record<UserSource, string> = {
+  scenario_first: '情境第一句，之後 LLM 扮演',
+  scenario_all: '情境逐回合輸入，不足由 LLM 補',
+  llm: '全部由 LLM 扮演',
+}

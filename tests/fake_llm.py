@@ -31,14 +31,17 @@ def openrouter_stream(text: str = "你好，", more: str = "世界", reasoning: 
 class FakeLLM:
     """依序回應預先排好的 (status, body)；記錄收到的請求。"""
 
-    def __init__(self, *responses: tuple[int, bytes]):
+    def __init__(self, *responses: tuple[int, bytes], default=None):
+        """default(body) -> (status, bytes)：排好的回應用完後（或併發、順序不定時）依請求內容產生回應。"""
         self.responses = list(responses)
+        self.default = default
         self.requests: list[dict] = []
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/chat/completions"):
-            self.requests.append(json.loads(request.content))
-            status, body = self.responses.pop(0)
+            body = json.loads(request.content)
+            self.requests.append(body)
+            status, body = self.responses.pop(0) if self.responses or self.default is None else self.default(body)
             return httpx.Response(status, content=body, headers={"content-type": "text/event-stream"})
         if request.url.path.endswith("/models"):
             return httpx.Response(200, json={"data": [

@@ -55,7 +55,7 @@ export default function ScenarioTrial({ scenario, saved, suggestPreflight }: Pro
   const ws = useResource<Workspace>('/workspace')
   const connections = useResource<Connection[]>('/connections')
   const userSim = useResource<UserSimSettings>('/user-sim')
-  const runs = useResource<RunSummary[]>(`/runs?scenario_id=${scenario.id}`)
+  const runs = useResource<RunSummary[]>(`/runs?scenario_id=${scenario.id}&standalone=true`)
   const [connId, setConnId] = useState<number | null>(null)
   const [turns, setTurns] = useState(3)
   const [mode, setMode] = useState<'live' | 'replay'>('live')
@@ -113,7 +113,7 @@ export default function ScenarioTrial({ scenario, saved, suggestPreflight }: Pro
               case 'message_done':
                 return { ...l, streaming: null, messages: [...l.messages, ev.message] }
               case 'done':
-                return { ...l, status: ev.run.status === 'running' ? 'done' : ev.run.status, run: ev.run, streaming: null }
+                return { ...l, status: ev.run.status === 'running' || ev.run.status === 'queued' ? 'done' : ev.run.status, run: ev.run, streaming: null }
               default:
                 return l
             }
@@ -130,7 +130,7 @@ export default function ScenarioTrial({ scenario, saved, suggestPreflight }: Pro
 
   const open = async (id: number) => {
     const run = await api<Run>(`/runs/${id}`)
-    setLive({ ...IDLE, runId: id, history: run.scenario.history, messages: run.messages, status: run.status === 'running' ? 'cancelled' : run.status, run, error: run.error })
+    setLive({ ...IDLE, runId: id, history: run.scenario.history, messages: run.messages, status: run.status === 'running' || run.status === 'queued' ? 'cancelled' : run.status, run, error: run.error })
   }
 
   const remove = async (id: number) => {

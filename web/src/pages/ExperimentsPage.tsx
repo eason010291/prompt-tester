@@ -1,16 +1,247 @@
-import { lazy, Suspense, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router'
-import DiffView from '../components/DiffView'
-import FeedbackBox, { scoreLevel } from '../components/FeedbackBox'
+import { useMemo, useState } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router'
+import { api } from '../api'
+import ExperimentView from '../components/ExperimentView'
+import { scoreLevel } from '../components/FeedbackBox'
+import RunCompare from '../components/RunCompare'
 import { formatCost, useResource } from '../hooks/useResource'
-import { collectScriptSets } from '../lib/st/scripts'
-import { makeMacro } from '../lib/st/regex'
-import { formatScore, shortId, type ComparedRun, type RunCompare, type RunMessage, type RunSummary } from '../types'
+import {
+  PROMOTE_LABEL,
+  formatScore,
+  shortId,
+  type Connection,
+  type ExperimentDetail,
+  type ExperimentSummary,
+  type RunSummary,
+  type Scenario,
+  type Script,
+  type Workspace,
+} from '../types'
 
-const StMessage = lazy(() => import('../components/StMessage'))
+const STATUS_LABEL = { running: '執行中', waiting: '等待晉級', done: '完成', cancelled: '已中止' }
 
-/** 試跑列表 + 兩次試跑並排比較（評語、分數、預設 diff），可盲評。 */
+/**
+ * 實驗頁：
+ * - ?a=&b=：兩次試跑並排比較（可帶 exp= 返回實驗）
+ * - ?exp=：金字塔實驗（各階段分支、晉級、評審預選）
+ * - 其他：新實驗、實驗列表、單次試跑比較
+ */
 export default function ExperimentsPage() {
+  const [params] = useSearchParams()
+  const a = Number(params.get('a')) || null
+  const b = Number(params.get('b')) || null
+  const exp = Number(params.get('exp')) || null
+
+  if (a && b) {
+    return (
+      <div className="experiments-page">
+        <header className="page-header row">
+          <h1>比較</h1>
+          <Link to={exp ? `/experiments?exp=${exp}` : '/experiments'} className="btn btn-sm">
+            ← {exp ? `回到實驗 #${exp}` : '回到實驗列表'}
+          </Link>
+        </header>
+        <RunCompare a={a} b={b} onFeedback={() => {}} />
+      </div>
+    )
+  }
+  if (exp) {
+    return (
+      <div className="experiments-page">
+        <header className="page-header row">
+          <h1>實驗 #{exp}</h1>
+          <Link to="/experiments" className="btn btn-sm">
+            ← 實驗列表
+          </Link>
+        </header>
+        <ExperimentView key={exp} id={exp} />
+      </div>
+    )
+  }
+  return <Overview />
+}
+
+function Overview() {
+  const navigate = useNavigate()
+  const list = useResource<ExperimentSummary[]>('/experiments')
+
+  return (
+    <div className="experiments-page">
+      <header className="page-header row">
+        <h1>實驗</h1>
+        <span className="muted small">金字塔批次：單回合多分支廣篩 → 晉級 → 多回合少分支。每個階段結束後由你確認晉級。</span>
+      </header>
+
+      <NewExperiment onCreated={(id) => navigate(`/experiments?exp=${id}`)} />
+
+      <section className="card">
+        <h2>實驗列表</h2>
+        {list.data?.length === 0 && <p className="muted">還沒有實驗。</p>}
+        {(list.data?.length ?? 0) > 0 && (
+          <table className="ep-table exp-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>名稱</th>
+                <th>狀態</th>
+                <th>階段</th>
+                <th>預設</th>
+                <th>腳本</th>
+                <th>分支</th>
+                <th>平均分</th>
+                <th>花費</th>
+                <th>時間</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.data?.map((e) => (
+                <tr key={e.id} className="clickable" onClick={() => navigate(`/experiments?exp=${e.id}`)}>
+                  <td>#{e.id}</td>
+                  <td>
+                    <Link to={`/experiments?exp=${e.id}`} onClick={(ev) => ev.stopPropagation()}>
+                      {e.name}
+                    </Link>
+                    {e.rerun_of && <span className="muted small">（重跑 #{e.rerun_of}）</span>}
+                  </td>
+                  <td>
+                    <span className={`chip exp-status exp-${e.status}`}>{STATUS_LABEL[e.status]}</span>
+                  </td>
+                  <td>
+                    {e.current_stage + 1}/{e.stage_count}
+                  </td>
+                  <td>
+                    {e.preset_name}
+                    {e.commit_id && <code className="muted"> @{shortId(e.commit_id)}</code>}
+                  </td>
+                  <td>{e.script_name}</td>
+                  <td>{e.runs}</td>
+                  <td>
+                    <span className="chip score-chip" data-level={scoreLevel(e.score)}>
+                      {formatScore(e.score)}
+                    </span>
+                  </td>
+                  <td>{formatCost(e.cost)}</td>
+                  <td className="muted">{new Date(e.created_at).toLocaleString('zh-TW', { dateStyle: 'short', timeStyle: 'short' })}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      <RunPicker />
+    </div>
+  )
+}
+
+function NewExperiment({ onCreated }: { onCreated: (id: number) => void }) {
+  const ws = useResource<Workspace>('/workspace')
+  const scripts = useResource<Script[]>('/scripts')
+  const scenarios = useResource<Scenario[]>('/scenarios')
+  const connections = useResource<Connection[]>('/connections')
+  const [scriptId, setScriptId] = useState<number | null>(null)
+  const [picked, setPicked] = useState<Set<number>>(new Set())
+  const [connId, setConnId] = useState<number | null>(null)
+  const [name, setName] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const script = scripts.data?.find((s) => s.id === scriptId) ?? scripts.data?.[0] ?? null
+  const conn = connections.data?.find((c) => c.id === connId) ?? connections.data?.[0] ?? null
+  const first = script?.resolved.stages[0]
+  const firstBranches = first ? picked.size * first.seeds * Math.max(1, first.temperatures.length) : 0
+
+  const start = async () => {
+    if (!ws.data || !script || !conn?.id) return
+    setBusy(true)
+    setError(null)
+    try {
+      const created = await api<ExperimentDetail>('/experiments', {
+        method: 'POST',
+        body: JSON.stringify({ name, preset: ws.data.preset, script_id: script.id, scenario_ids: [...picked], connection_id: conn.id }),
+      })
+      onCreated(created.id)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <details className="card new-exp" open>
+      <summary>
+        <h2>新實驗</h2>
+        <span className="muted small">
+          預設：工作區的 {ws.data?.preset.name ?? '…'}
+          {ws.data?.base_commit && ` @${shortId(ws.data.base_commit)}`}（提交後再跑，版本樹才會連到實驗）
+        </span>
+      </summary>
+      <div className="form-grid">
+        <label>
+          名稱（選填）
+          <input value={name} placeholder="預設：預設名稱 × 腳本名稱" onChange={(e) => setName(e.target.value)} />
+        </label>
+        <label>
+          腳本
+          <select value={script?.id ?? ''} onChange={(e) => setScriptId(Number(e.target.value))}>
+            {scripts.data?.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          角色連線
+          <select value={conn?.id ?? ''} onChange={(e) => setConnId(Number(e.target.value))}>
+            {connections.data?.map((c) => (
+              <option key={c.id} value={c.id!}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {script && (
+        <p className="muted small">
+          {script.resolved.stages
+            .map((st, i) => `${i + 1}. ${st.name || '階段'}：累計 ${st.turns} 回 × ${st.seeds} 條${st.temperatures.length > 1 ? ` × ${st.temperatures.length} 個溫度` : ''}${i < script.resolved.stages.length - 1 ? ` → ${PROMOTE_LABEL[st.promote.mode]}` : ''}`)
+            .join('　')}{' '}
+          <Link to={`/scripts?id=${script.id}`}>編輯腳本</Link>
+        </p>
+      )}
+      <fieldset className="scenario-picks">
+        <legend>情境</legend>
+        {scenarios.data?.map((s) => (
+          <label key={s.id} className="check">
+            <input
+              type="checkbox"
+              checked={picked.has(s.id!)}
+              onChange={() => {
+                const n = new Set(picked)
+                if (n.has(s.id!)) n.delete(s.id!)
+                else n.add(s.id!)
+                setPicked(n)
+              }}
+            />
+            {s.name}
+          </label>
+        ))}
+      </fieldset>
+      <div className="add-bar">
+        <button className="btn btn-primary" disabled={busy || !picked.size || !script || !conn || !ws.data} onClick={start}>
+          ▶ 開始第 1 階段（{firstBranches} 條分支）
+        </button>
+        {!connections.data?.length && <Link to="/settings">先到設定頁建立連線</Link>}
+        {error && <span className="alert alert-error">{error}</span>}
+      </div>
+    </details>
+  )
+}
+
+/** 任選兩次試跑（單次試跑或實驗分支）並排比較 */
+function RunPicker() {
   const [params, setParams] = useSearchParams()
   const a = Number(params.get('a')) || null
   const b = Number(params.get('b')) || null
@@ -37,323 +268,91 @@ export default function ExperimentsPage() {
   const shown = (runs.data ?? []).filter((r) => effectiveFilter === 'all' || r.scenario_id === effectiveFilter)
 
   return (
-    <div className="experiments-page">
-      <header className="page-header row">
-        <h1>實驗</h1>
-        <span className="muted small">挑兩次試跑並排比較：逐回合回覆、評語分數與預設差異。批次與金字塔晉級在 M4 後續加入。</span>
-      </header>
-
-      <details className="card run-picker" open={!(a && b)}>
-        <summary>
-          <h2>試跑紀錄</h2>
-          <span className="muted small">
-            A：{a ? `#${a}` : '—'} · B：{b ? `#${b}` : '—'}
-          </span>
-        </summary>
-        <div className="add-bar">
-          <label className="inline">
-            情境
-            <select value={effectiveFilter} onChange={(e) => setScenarioFilter(e.target.value === 'all' ? 'all' : Number(e.target.value))}>
-              <option value="all">全部</option>
-              {scenarios.map(([id, name]) => (
-                <option key={id} value={id}>
-                  {name}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        {runs.error && <p className="alert alert-error">{runs.error}</p>}
-        {runs.data && runs.data.length === 0 && <p className="muted">還沒有任何試跑。到「情境」頁的「多回合試跑」跑幾次再回來比較。</p>}
-        {shown.length > 0 && (
-          <table className="ep-table run-table">
-            <thead>
-              <tr>
-                <th>比較</th>
-                <th>#</th>
-                <th>情境</th>
-                <th>預設</th>
-                <th>模式</th>
-                <th>回合</th>
-                <th>連線</th>
-                <th>分數</th>
-                <th>花費</th>
-                <th>時間</th>
-              </tr>
-            </thead>
-            <tbody>
-              {shown.map((r) => (
-                <tr key={r.id} className={r.id === a || r.id === b ? 'picked' : r.status !== 'done' ? 'dim' : ''}>
-                  <td className="pick-cell">
-                    {(['a', 'b'] as const).map((side) => (
-                      <button
-                        key={side}
-                        className="pin"
-                        aria-pressed={(side === 'a' ? a : b) === r.id}
-                        onClick={() => pick(side, r.id)}
-                        aria-label={`設為 ${side.toUpperCase()}`}
-                      >
-                        {side.toUpperCase()}
-                      </button>
-                    ))}
-                  </td>
-                  <td>#{r.id}</td>
-                  <td>{r.scenario_name ?? '—'}</td>
-                  <td>
-                    {r.preset_name}
-                    {r.commit_id && <code className="muted"> @{shortId(r.commit_id)}</code>}
-                  </td>
-                  <td>{r.mode === 'live' ? '即時' : `回放 #${r.replay_of}`}</td>
-                  <td>
-                    {r.replies}/{r.turns}
-                  </td>
-                  <td>{r.connection_name}</td>
-                  <td>
-                    <span className="chip score-chip" data-level={scoreLevel(r.score)}>
-                      {formatScore(r.score)}
-                    </span>
-                  </td>
-                  <td>{formatCost(r.cost)}</td>
-                  <td className="muted">{new Date(r.created_at).toLocaleString('zh-TW', { dateStyle: 'short', timeStyle: 'short' })}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </details>
-
-      {a && b ? <Compare a={a} b={b} onFeedback={runs.reload} /> : <p className="muted">在上方各選一個 A 與 B。</p>}
-    </div>
-  )
-}
-
-function Compare({ a, b, onFeedback }: { a: number; b: number; onFeedback: () => void }) {
-  const cmp = useResource<RunCompare>(`/compare/runs?a=${a}&b=${b}`)
-  const [blind, setBlind] = useState(false)
-  const [swap, setSwap] = useState(false)
-  const [revealed, setRevealed] = useState<string | null>(null)
-
-  if (cmp.error) return <p className="alert alert-error">{cmp.error}</p>
-  if (!cmp.data) return <p className="muted">載入中…</p>
-  const data = cmp.data
-
-  const toggleBlind = () => {
-    if (blind) {
-      // 揭曉：記下盲評時的 X / Y 各是哪一次
-      const [x, y] = swap ? [data.b, data.a] : [data.a, data.b]
-      setRevealed(`X = #${x.id}（${x.preset_name}），Y = #${y.id}（${y.preset_name}）`)
-      setBlind(false)
-    } else {
-      setSwap(Math.random() < 0.5)
-      setRevealed(null)
-      setBlind(true)
-    }
-  }
-
-  const sides: { key: string; label: string; run: ComparedRun }[] = blind
-    ? (swap ? [data.b, data.a] : [data.a, data.b]).map((run, i) => ({ key: String(run.id), label: i ? 'Y' : 'X', run }))
-    : [
-        { key: String(data.a.id), label: 'A', run: data.a },
-        { key: String(data.b.id), label: 'B', run: data.b },
-      ]
-  const reload = () => {
-    cmp.reload()
-    onFeedback()
-  }
-
-  return (
-    <div className="compare">
-      <div className="add-bar">
-        <button className="btn btn-sm" aria-pressed={blind} onClick={toggleBlind}>
-          {blind ? '揭曉' : '盲評模式'}
-        </button>
-        {blind ? (
-          <span className="muted small">已隨機左右對調並隱藏預設、模型與花費；評完再按「揭曉」。</span>
-        ) : (
-          <span className="muted small">
-            {data.same_preset ? '兩次使用完全相同的預設（差異來自 seed、模型或使用者發言）。' : '兩次的預設不同，差異見下方。'}
-          </span>
-        )}
-      </div>
-      {revealed && (
-        <p className="alert" role="status">
-          {revealed}
-        </p>
-      )}
-
-      <ScoreTable sides={sides} />
-
-      <div className="compare-grid">
-        {sides.map((s) => (
-          <RunHead key={s.key} label={s.label} run={s.run} blind={blind} />
-        ))}
-        {alignTurns(sides.map((s) => s.run)).map((row) => (
-          <TurnRow key={row.turn} turn={row.turn} cells={row.cells} sides={sides} onFeedback={reload} />
-        ))}
-        {sides.map((s) => (
-          <div key={s.key} className="compare-cell">
-            <FeedbackBox
-              targetType="run"
-              targetId={s.run.id}
-              items={s.run.feedback.filter((f) => f.target_type === 'run')}
-              onChanged={reload}
-              label={`${s.label} 整體評語`}
-            />
-          </div>
-        ))}
-      </div>
-
-      {!blind && data.diff && !data.same_preset && (
-        <details className="card" open>
-          <summary>
-            <h2>預設差異（A → B）</h2>
-          </summary>
-          <DiffView diff={data.diff} labels={[`A #${data.a.id}`, `B #${data.b.id}`]} />
-        </details>
-      )}
-    </div>
-  )
-}
-
-function RunHead({ label, run, blind }: { label: string; run: ComparedRun; blind: boolean }) {
-  return (
-    <div className="compare-cell compare-head">
-      <strong className="side-label">{label}</strong>
-      {blind ? (
-        <span className="muted small">{run.scenario.name}</span>
-      ) : (
+    <details className="card run-picker">
+      <summary>
+        <h2>試跑比較</h2>
         <span className="muted small">
-          #{run.id} · {run.preset_name}
-          {run.commit_id && ` @${shortId(run.commit_id)}`} · {run.connection?.model} · seed {run.seed} · {run.mode === 'live' ? '即時' : `回放 #${run.replay_of}`} ·{' '}
-          {formatCost(run.cost)}
+          任選兩次試跑並排比較 · A：{a ? `#${a}` : '—'} · B：{b ? `#${b}` : '—'}
         </span>
+      </summary>
+      <div className="add-bar">
+        <label className="inline">
+          情境
+          <select value={effectiveFilter} onChange={(e) => setScenarioFilter(e.target.value === 'all' ? 'all' : Number(e.target.value))}>
+            <option value="all">全部</option>
+            {scenarios.map(([id, name]) => (
+              <option key={id} value={id}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {runs.error && <p className="alert alert-error">{runs.error}</p>}
+      {runs.data && runs.data.length === 0 && <p className="muted">還沒有任何試跑。</p>}
+      {shown.length > 0 && (
+        <table className="ep-table run-table">
+          <thead>
+            <tr>
+              <th>比較</th>
+              <th>#</th>
+              <th>情境</th>
+              <th>預設</th>
+              <th>來源</th>
+              <th>回合</th>
+              <th>連線</th>
+              <th>分數</th>
+              <th>花費</th>
+              <th>時間</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((r) => (
+              <tr key={r.id} className={r.id === a || r.id === b ? 'picked' : r.status !== 'done' ? 'dim' : ''}>
+                <td className="pick-cell">
+                  {(['a', 'b'] as const).map((side) => (
+                    <button
+                      key={side}
+                      className="pin"
+                      aria-pressed={(side === 'a' ? a : b) === r.id}
+                      onClick={() => pick(side, r.id)}
+                      aria-label={`設為 ${side.toUpperCase()}`}
+                    >
+                      {side.toUpperCase()}
+                    </button>
+                  ))}
+                </td>
+                <td>#{r.id}</td>
+                <td>{r.scenario_name ?? '—'}</td>
+                <td>
+                  {r.preset_name}
+                  {r.commit_id && <code className="muted"> @{shortId(r.commit_id)}</code>}
+                </td>
+                <td>
+                  {r.experiment_id ? (
+                    <Link to={`/experiments?exp=${r.experiment_id}`}>
+                      實驗 #{r.experiment_id} 階段 {(r.stage ?? 0) + 1}
+                    </Link>
+                  ) : r.mode === 'live' ? (
+                    '試跑'
+                  ) : (
+                    `回放 #${r.replay_of}`
+                  )}
+                </td>
+                <td>{r.last_turn ?? 0}</td>
+                <td>{r.connection_name}</td>
+                <td>
+                  <span className="chip score-chip" data-level={scoreLevel(r.score)}>
+                    {formatScore(r.score)}
+                  </span>
+                </td>
+                <td>{formatCost(r.cost)}</td>
+                <td className="muted">{new Date(r.created_at).toLocaleString('zh-TW', { dateStyle: 'short', timeStyle: 'short' })}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
-    </div>
-  )
-}
-
-function ScoreTable({ sides }: { sides: { label: string; run: ComparedRun }[] }) {
-  const names = [...new Set(sides.flatMap((s) => Object.keys(s.run.scores.attributes)))]
-  if (!names.length) return <p className="muted small">還沒有分數。在下方評語寫「屬性：7/10」這樣的行就會統計。</p>
-  const [x, y] = sides
-  const row = (name: string, vx: number | null | undefined, vy: number | null | undefined, strong = false) => {
-    const delta = vx != null && vy != null ? vy - vx : null
-    return (
-      <tr key={name} className={strong ? 'total' : ''}>
-        <td>{name}</td>
-        <td>
-          <span className="chip score-chip" data-level={scoreLevel(vx)}>
-            {formatScore(vx)}
-          </span>
-        </td>
-        <td>
-          <span className="chip score-chip" data-level={scoreLevel(vy)}>
-            {formatScore(vy)}
-          </span>
-        </td>
-        <td className={delta == null || delta === 0 ? 'muted' : delta > 0 ? 'delta-up' : 'delta-down'}>
-          {delta == null ? '—' : `${delta > 0 ? '+' : ''}${formatScore(Math.round(delta * 100) / 100)}`}
-        </td>
-      </tr>
-    )
-  }
-  return (
-    <table className="ep-table score-table">
-      <thead>
-        <tr>
-          <th>屬性</th>
-          <th>{x.label}</th>
-          <th>{y.label}</th>
-          <th>
-            {y.label} − {x.label}
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        {names.map((n) => row(n, x.run.scores.attributes[n], y.run.scores.attributes[n]))}
-        {row('整體平均', x.run.scores.overall, y.run.scores.overall, true)}
-      </tbody>
-    </table>
-  )
-}
-
-interface Cell {
-  messages: { m: RunMessage; depth: number }[]
-}
-
-/** 依回合對齊兩邊的訊息；depth 是 ST 正則用的「距離最新一則」 */
-function alignTurns(runs: ComparedRun[]): { turn: number; cells: Cell[] }[] {
-  const maxTurn = Math.max(0, ...runs.flatMap((r) => r.messages.map((m) => m.turn)))
-  return Array.from({ length: maxTurn }, (_, i) => ({
-    turn: i + 1,
-    cells: runs.map((r) => {
-      const total = r.scenario.history.length + r.messages.length
-      return {
-        messages: r.messages
-          .map((m, idx) => ({ m, depth: total - (r.scenario.history.length + idx) - 1 }))
-          .filter((x) => x.m.turn === i + 1),
-      }
-    }),
-  }))
-}
-
-function TurnRow({
-  turn,
-  cells,
-  sides,
-  onFeedback,
-}: {
-  turn: number
-  cells: Cell[]
-  sides: { key: string; run: ComparedRun }[]
-  onFeedback: () => void
-}) {
-  return (
-    <>
-      <div className="turn-label">第 {turn} 回合</div>
-      {cells.map((cell, i) => (
-        <SideTurn key={sides[i].key} cell={cell} run={sides[i].run} onFeedback={onFeedback} />
-      ))}
-    </>
-  )
-}
-
-function SideTurn({ cell, run, onFeedback }: { cell: Cell; run: ComparedRun; onFeedback: () => void }) {
-  const scenario = run.scenario
-  const scriptSets = useMemo(
-    () => collectScriptSets((run.preset?.extra?.extensions as { regex_scripts?: unknown } | undefined)?.regex_scripts, scenario.card?.regex_scripts, { preset: true, card: true }),
-    [run.preset, scenario.card],
-  )
-  const macro = useMemo(() => makeMacro({ ...scenario.vars, char: scenario.char, user: scenario.user }), [scenario])
-  if (!cell.messages.length) return <div className="compare-cell muted small">（沒有這個回合）</div>
-  return (
-    <div className="compare-cell">
-      {cell.messages.map(({ m, depth }) =>
-        m.role === 'user' ? (
-          <div key={m.id} className="bubble bubble-user">
-            <span className="bubble-role">{scenario.user}</span>
-            <div className="bubble-text">{m.content}</div>
-          </div>
-        ) : (
-          <div key={m.id} className="bubble bubble-assistant">
-            <span className="bubble-role">
-              {scenario.char}
-              {m.finish_reason === 'length' && <em> · 被截斷</em>}
-            </span>
-            <Suspense fallback={<pre className="msg-content">{m.content}</pre>}>
-              <StMessage text={m.content} theme="st-dark" depth={depth} charName={scenario.char} scriptSets={scriptSets} macro={macro} />
-            </Suspense>
-            {m.error && <p className="alert alert-error">{m.error}</p>}
-            <FeedbackBox
-              targetType="run_message"
-              targetId={m.id}
-              items={run.feedback.filter((f) => f.target_type === 'run_message' && f.target_id === m.id)}
-              onChanged={onFeedback}
-              compact
-            />
-          </div>
-        ),
-      )}
-    </div>
+    </details>
   )
 }
