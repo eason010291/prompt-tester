@@ -1711,3 +1711,52 @@ label.inline input[type='number'] {
   font-style: normal;
   color: var(--text-muted);
 }
+
+/* ---- 重試與手動輸入 ---- */
+
+.input-mode-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px var(--s-sm);
+  padding: var(--s-xs) var(--s-sm);
+  border-radius: var(--r-md);
+  background: var(--bg-soft);
+}
+
+.bubble-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.user-editor textarea {
+  width: 100%;
+  min-height: 70px;
+  resize: vertical;
+  font-size: 14px;
+}
+
+.next-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--s-xs) var(--s-sm);
+  border: 1px dashed var(--accent);
+  border-radius: var(--r-md);
+}
+
+.next-inputs textarea {
+  min-height: 52px;
+}
+
+.archived {
+  margin: 6px 0;
+}
+
+.bubble-user:has(.user-editor) {
+  align-self: stretch;
+  max-width: none;
+}

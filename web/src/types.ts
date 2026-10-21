@@ -453,7 +453,30 @@ export interface UserSimSettings {
   reasoning_effort: ReasoningEffort | null
 }
 
-export type RunSource = 'scenario' | 'llm_user' | 'replay' | 'replay_fallback' | 'char'
+export type RunSource = 'scenario' | 'llm_user' | 'replay' | 'replay_fallback' | 'manual' | 'char'
+
+export const SOURCE_LABEL: Record<RunSource, string> = {
+  scenario: '情境',
+  llm_user: 'LLM 扮演',
+  replay: '回放',
+  replay_fallback: 'LLM 補位',
+  manual: '手動輸入',
+  char: '角色',
+}
+
+export interface ArchivedMessage {
+  id: number
+  run_id: number
+  idx: number
+  turn: number
+  role: 'user' | 'assistant'
+  source: RunSource
+  content: string
+  cost: number | null
+  model: string | null
+  archived_at: string
+  reason: string
+}
 
 export interface RunMessage {
   id: number

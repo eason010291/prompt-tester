@@ -4,6 +4,7 @@
 """
 
 import sqlite3
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -148,17 +149,62 @@ async def get_experiment(exp_id: int, conn: sqlite3.Connection = Depends(get_db)
 
 class AdvanceIn(BaseModel):
     run_ids: list[int] = []
+    # 使用者接管輸入：下一階段新回合的使用者發言 {全域回合: 內容}；空白的仍由 LLM 扮演
+    user_turns: dict[int, str] = {}
 
 
 @router.post("/experiments/{exp_id}/advance")
 async def advance(exp_id: int, body: AdvanceIn, request: Request, conn: sqlite3.Connection = Depends(get_db)) -> dict:
     try:
-        _manager(request).advance(exp_id, body.run_ids)
+        _manager(request).advance(exp_id, body.run_ids, body.user_turns)
     except KeyError as e:
         raise HTTPException(404, str(e).strip("'")) from e
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
     return ex.detail(conn, exp_id)
+
+
+class RetryTarget(BaseModel):
+    run_id: int
+    turn: int
+    role: Literal["user", "assistant"]
+
+
+class RetryBatch(BaseModel):
+    """本階段所有分支的同一回合、同一角色。"""
+
+    stage: int
+    turn: int
+    role: Literal["user", "assistant"]
+
+
+class RetryIn(BaseModel):
+    items: list[RetryTarget] = []
+    batch: RetryBatch | None = None
+    # 重試使用者發言時改用這段手動輸入（省略則由模擬使用者重新產生）
+    user_text: str | None = None
+    # 之後回合的使用者發言：keep 沿用、regenerate 重新產生
+    later_users: Literal["keep", "regenerate"] = "regenerate"
+
+
+@router.post("/experiments/{exp_id}/retry")
+async def retry(exp_id: int, body: RetryIn, request: Request, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    targets = [(t.run_id, t.turn, t.role) for t in body.items]
+    if body.batch is not None:
+        b = body.batch
+        targets += [(r["id"], b.turn, b.role) for r in store.list_runs(conn, limit=10_000, experiment_id=exp_id)
+                    if r["stage"] == b.stage]
+    if not targets:
+        raise HTTPException(422, "沒有要重試的訊息")
+    try:
+        result = _manager(request).retry(exp_id, targets, user_text=body.user_text, later_users=body.later_users)
+    except KeyError as e:
+        raise HTTPException(404, str(e).strip("'")) from e
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    if not result["started"]:
+        raise HTTPException(422, "沒有可以重試的分支：" + "；".join(f"#{x['run_id']} {x['reason']}" for x in result["skipped"]))
+    return result
 
 
 @router.post("/experiments/{exp_id}/cancel")
