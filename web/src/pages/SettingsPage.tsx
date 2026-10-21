@@ -94,6 +94,7 @@ export default function SettingsPage() {
       <AgentAccessCard />
       <JudgeCard connections={connections.data ?? []} />
       <FeedbackTemplateCard />
+      <RetryReasonsCard />
     </div>
   )
 }
@@ -797,6 +798,29 @@ function AgentAccessCard() {
           </ul>
         </details>
       )}
+    </section>
+  )
+}
+
+function RetryReasonsCard() {
+  const { data } = useResource<{ reasons: string[] }>('/retry-reasons')
+  return data ? <RetryReasonsForm initial={data.reasons.join('\n')} /> : null
+}
+
+function RetryReasonsForm({ initial }: { initial: string }) {
+  const [text, setText] = useState(initial)
+  const state = useAutosave(text, (v) => api('/retry-reasons', { method: 'PUT', body: JSON.stringify({ reasons: v.split('\n') }) }))
+  return (
+    <section className="card">
+      <div className="list-head">
+        <h2>重試原因</h2>
+        <span className={`save-state save-${state}`}>{SAVE_LABEL[state]}</span>
+      </div>
+      <p className="muted small">重試時可勾選的原因標籤（一行一個），另外永遠有「其他」可自行輸入。實驗頁的重試統計會依模型列出各原因的次數。</p>
+      <label className="stack">
+        標籤
+        <textarea className="tall" value={text} onChange={(e) => setText(e.target.value)} />
+      </label>
     </section>
   )
 }

@@ -15,6 +15,16 @@
 | M4 | LLM 扮演 {{user}} 的多回合試跑；腳本繼承樹；金字塔實驗（多 seed、溫度掃描、晉級、評審預選、重跑對照） | ✅ |
 | M5 | 評語（自由文字 + 分數解析）、試跑並排比較、盲評、版本平均分 | ✅ |
 | M6 | LLM 依評語修改：內建 tool-calling 迴圈、MCP（HTTP / stdio）、REST 工具；一鍵修改 → 提交 → 重跑 | ✅ |
+| 實驗操作 | 分層重試（單則 / 分支 / 階段，含原因標籤與重試率統計）、手動接管使用者輸入、卡住偵測與續跑、迴歸試算 → 驗證輪次 | ✅ |
+
+## 使用流程
+
+1. **提示詞**：匯入 ST 預設或手動組裝區塊，右側即時預覽送出的 `messages[]`；改好後在上方「提交」。
+2. **情境**：匯入角色卡或手填開場、歷史、使用者人設與目標；可先「預檢」2 回合。
+3. **腳本**：設定金字塔各階段的回合數、分支數、溫度掃描與晉級方式（子腳本只存覆寫）。
+4. **實驗**：選腳本、情境與連線開跑；每階段結束後挑選晉級的分支，對回覆寫評語（「屬性：n/10」會解析成分數），不滿意的回覆可重試。
+5. **修改與迴歸**：「依評語修改」讓 LLM 改預設並提交到新分支；在有問題的回覆上「🔍 迴歸試算」比較新舊版本，滿意後開「驗證輪次」只重跑相關分支。
+6. **版本樹**：查看各版本的平均分、diff，切換或 cherry-pick 區塊。
 
 ## 需求
 
@@ -80,15 +90,16 @@ cd web && npm run lint && npm run build
 | `src/prompt_tester/st_preset.py` | ST 預設匯入 / 匯出 |
 | `src/prompt_tester/st_card.py` | ST 角色卡讀取 |
 | `src/prompt_tester/worldinfo.py` | 世界書觸發 |
-| `src/prompt_tester/vcs.py` | 預設版本庫（blob / tree / commit / ref、diff） |
-| `src/prompt_tester/llm.py` | OpenAI 相容串流 client |
+| `src/prompt_tester/vcs.py`、`workspace.py` | 預設版本庫（blob / tree / commit / ref、diff）、工作區提交 |
+| `src/prompt_tester/runner.py` | 多回合試跑（LLM 扮演使用者、回放、接續與重試） |
+| `src/prompt_tester/llm.py` | OpenAI 相容 client（串流、重試、卡住偵測、tool calling） |
 | `src/prompt_tester/providers.py` | 供應商金鑰與模型目錄 |
 | `src/prompt_tester/scripts.py`、`experiments.py` | 腳本繼承樹、金字塔實驗 |
 | `src/prompt_tester/feedback.py` | 評語與分數 |
 | `src/prompt_tester/agent_tools.py`、`modifier.py` | LLM 修改工具與內建迴圈 |
 | `src/prompt_tester/mcp_server.py`、`mcp_stdio.py` | MCP 接口 |
 | `src/prompt_tester/routes/` | API 路由 |
-| `web/` | React + Vite 前端 |
+| `web/` | React + Vite 前端（`lib/st/` 為 ST 正則與訊息渲染的移植） |
 | `tests/` | 後端測試 |
 | `data/` | SQLite 資料庫（自動建立，不入版控） |
 | `config.local.toml` | 本機設定與 API key（不入版控） |

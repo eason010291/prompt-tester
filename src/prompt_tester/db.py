@@ -256,6 +256,47 @@ MIGRATIONS: list[tuple[int, str]] = [
         CREATE INDEX run_message_archive_run ON run_message_archive(run_id, idx);
         """,
     ),
+    (
+        10,
+        # 分層重試：重試紀錄（原因標籤）、封存保留錯誤與供應商（統計用）；
+        # 部分迴歸：新分支記下對照的原分支；迴歸試算（不寫入實驗）
+        """
+        CREATE TABLE retry_log (
+            id            INTEGER PRIMARY KEY,
+            created_at    TEXT NOT NULL,
+            experiment_id INTEGER NOT NULL,
+            run_id        INTEGER NOT NULL,
+            scope         TEXT NOT NULL,      -- message | branch | stage | resume | cascade
+            kind          TEXT NOT NULL,      -- manual（使用者不滿意）| error（出錯 / 中斷）| cascade（上層連帶）
+            turn          INTEGER,
+            role          TEXT,
+            model         TEXT,               -- 角色連線的模型
+            tags          TEXT NOT NULL DEFAULT '[]',
+            note          TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX retry_log_experiment ON retry_log(experiment_id);
+        ALTER TABLE run_message_archive ADD COLUMN error TEXT;
+        ALTER TABLE run_message_archive ADD COLUMN served_by TEXT;
+        ALTER TABLE runs ADD COLUMN origin_run_id INTEGER;
+        CREATE TABLE probes (
+            id            INTEGER PRIMARY KEY,
+            created_at    TEXT NOT NULL,
+            experiment_id INTEGER NOT NULL,
+            run_id        INTEGER NOT NULL,
+            turn          INTEGER NOT NULL,
+            preset_hash   TEXT NOT NULL,
+            commit_id     TEXT,
+            content       TEXT NOT NULL,
+            reasoning     TEXT NOT NULL DEFAULT '',
+            cost          REAL,
+            model         TEXT,
+            served_by     TEXT,
+            finish_reason TEXT,
+            error         TEXT
+        );
+        CREATE INDEX probes_run ON probes(run_id, turn);
+        """,
+    ),
 ]
 
 
