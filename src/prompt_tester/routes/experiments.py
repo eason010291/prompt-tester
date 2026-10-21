@@ -166,8 +166,9 @@ async def advance(exp_id: int, body: AdvanceIn, request: Request, conn: sqlite3.
 
 class RetryTarget(BaseModel):
     run_id: int
-    turn: int
-    role: Literal["user", "assistant"]
+    # 省略 turn / role = 續跑：從中斷處接著跑
+    turn: int | None = None
+    role: Literal["user", "assistant"] | None = None
 
 
 class RetryBatch(BaseModel):
@@ -181,6 +182,8 @@ class RetryBatch(BaseModel):
 class RetryIn(BaseModel):
     items: list[RetryTarget] = []
     batch: RetryBatch | None = None
+    # 續跑這個階段所有未完成（出錯 / 中止）的分支
+    resume_stage: int | None = None
     # 重試使用者發言時改用這段手動輸入（省略則由模擬使用者重新產生）
     user_text: str | None = None
     # 之後回合的使用者發言：keep 沿用、regenerate 重新產生
@@ -190,12 +193,17 @@ class RetryIn(BaseModel):
 @router.post("/experiments/{exp_id}/retry")
 async def retry(exp_id: int, body: RetryIn, request: Request, conn: sqlite3.Connection = Depends(get_db)) -> dict:
     targets = [(t.run_id, t.turn, t.role) for t in body.items]
+    if body.resume_stage is not None:
+        targets += [(r["id"], None, None) for r in store.list_runs(conn, limit=10_000, experiment_id=exp_id)
+                    if r["stage"] == body.resume_stage and r["status"] in ("error", "cancelled")]
     if body.batch is not None:
         b = body.batch
         targets += [(r["id"], b.turn, b.role) for r in store.list_runs(conn, limit=10_000, experiment_id=exp_id)
                     if r["stage"] == b.stage]
+    if any((t[1] is None) != (t[2] is None) for t in targets):
+        raise HTTPException(422, "turn 與 role 要一起提供（都省略代表續跑）")
     if not targets:
-        raise HTTPException(422, "沒有要重試的訊息")
+        raise HTTPException(422, "沒有要重試或續跑的分支")
     try:
         result = _manager(request).retry(exp_id, targets, user_text=body.user_text, later_users=body.later_users)
     except KeyError as e:
@@ -205,6 +213,17 @@ async def retry(exp_id: int, body: RetryIn, request: Request, conn: sqlite3.Conn
     if not result["started"]:
         raise HTTPException(422, "沒有可以重試的分支：" + "；".join(f"#{x['run_id']} {x['reason']}" for x in result["skipped"]))
     return result
+
+
+@router.post("/experiments/{exp_id}/runs/{run_id}/cancel")
+async def cancel_run(exp_id: int, run_id: int, request: Request) -> dict:
+    """中止單一分支（卡住時用）；其他分支繼續。"""
+    try:
+        return {"status": _manager(request).cancel_run(exp_id, run_id)}
+    except KeyError as e:
+        raise HTTPException(404, str(e).strip("'")) from e
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
 
 
 @router.post("/experiments/{exp_id}/cancel")

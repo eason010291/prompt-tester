@@ -211,12 +211,7 @@ export default function ExperimentView({ id }: { id: number }) {
                       stageSize: byStage(r.stage).length,
                       inputMode,
                       laterUsers: later,
-                      locked:
-                        d.status === 'running'
-                          ? '實驗正在執行，請等目前的階段或重試結束'
-                          : hasChildren
-                            ? '已有下一階段的分支接續它'
-                            : null,
+                      locked: hasChildren ? '已有下一階段的分支接續它' : null,
                       onStarted: exp.reload,
                     }
                   : undefined
@@ -278,6 +273,8 @@ function StageCard({ d, st, i, runs, judge, active, open, pendingA, onOpen, onCo
   const isLast = i === script.stages.length - 1
   const next = script.stages[i + 1] as Stage | undefined
   const done = runs.filter((r) => r.status === 'done')
+  // 出錯 / 中止、且還沒有子分支接續的分支可以續跑
+  const unfinished = runs.filter((r) => (r.status === 'error' || r.status === 'cancelled') && !d.runs.some((x) => x.parent_run_id === r.id))
   const judgePicks = useMemo(
     () => Object.entries(judge?.picks ?? {}).filter(([, v]) => v.pick).map(([k]) => Number(k)),
     [judge],
@@ -342,6 +339,20 @@ function StageCard({ d, st, i, runs, judge, active, open, pendingA, onOpen, onCo
         </span>
       </div>
 
+      {unfinished.length > 0 && (
+        <div className="resume-bar">
+          <span className="small">
+            {unfinished.length} 條分支沒有跑完（出錯或中止）：{unfinished.map((r) => `#${r.id}`).join('、')}
+          </span>
+          <button
+            className="btn btn-sm"
+            onClick={() => act(() => api(`/experiments/${d.id}/retry`, { method: 'POST', body: JSON.stringify({ resume_stage: i }) }))}
+            title="從中斷處接著跑（最後一則出錯就重試它），已完成的部分保留"
+          >
+            ↻ 續跑未完成的分支
+          </button>
+        </div>
+      )}
       {judge && (judge.error || judge.model) && (
         <p className={`small ${judge.error ? 'alert alert-error' : 'muted'}`}>
           {judge.error ? `評審失敗：${judge.error}` : `評審 ${judge.model} 已預選 ${judgePicks.length} 條 · ${formatCost(judge.cost)}`}
@@ -385,6 +396,15 @@ function StageCard({ d, st, i, runs, judge, active, open, pendingA, onOpen, onCo
                       {jp?.reason && <span className="branch-reason">評審：{jp.reason}</span>}
                     </button>
                     <span className="branch-actions">
+                      {(r.status === 'running' || r.status === 'queued') && (
+                        <button
+                          className="btn btn-sm danger"
+                          title="只中止這條分支（卡住時用），其他分支繼續"
+                          onClick={() => act(() => api(`/experiments/${d.id}/runs/${r.id}/cancel`, { method: 'POST' }))}
+                        >
+                          中止
+                        </button>
+                      )}
                       {r.counterpart && (
                         <Link className="btn btn-sm" to={`/experiments?a=${r.counterpart}&b=${r.id}&exp=${d.id}`} title="與原實驗同位置的分支並排比較">
                           對照

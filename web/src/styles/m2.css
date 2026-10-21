@@ -1760,3 +1760,17 @@ label.inline input[type='number'] {
   align-self: stretch;
   max-width: none;
 }
+
+.resume-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px var(--s-sm);
+  padding: 6px 10px;
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--warning) 12%, var(--bg-card));
+}
+
+.resume-bar .btn {
+  margin-left: auto;
+}
