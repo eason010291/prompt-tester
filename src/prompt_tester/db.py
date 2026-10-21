@@ -1,6 +1,7 @@
 """SQLite 連線與遷移。每個里程碑新增的資料表以一筆 migration 追加，不修改舊的。"""
 
 import sqlite3
+import threading
 from pathlib import Path
 
 # (版本號, SQL)。只能往後追加。
@@ -238,13 +239,58 @@ MIGRATIONS: list[tuple[int, str]] = [
 ]
 
 
+# 寫入互相等待的上限（毫秒）。交易都很短，正常不會等到
+BUSY_TIMEOUT_MS = 10_000
+
+
+class ThreadLocalConnection:
+    """每個執行緒各自一條 SQLite 連線，介面與 sqlite3.Connection 相同（execute、with 交易…）。
+
+    FastAPI 的同步 endpoint 在執行緒池執行，async endpoint 與背景工作在事件迴圈執行緒；
+    共用同一條連線時，並行請求會互相干擾（sqlite3.InterfaceError: bad parameter or other API misuse）。
+    WAL 模式下各連線可同時讀，寫入以 busy_timeout 排隊。
+    """
+
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+        self._local = threading.local()
+        self._all: list[sqlite3.Connection] = []
+        self._lock = threading.Lock()
+
+    def _conn(self) -> sqlite3.Connection:
+        c = getattr(self._local, "conn", None)
+        if c is None:
+            c = sqlite3.connect(self.db_path, check_same_thread=False, timeout=BUSY_TIMEOUT_MS / 1000)
+            c.row_factory = sqlite3.Row
+            c.execute("PRAGMA foreign_keys = ON")
+            c.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
+            self._local.conn = c
+            with self._lock:
+                self._all.append(c)
+        return c
+
+    def __getattr__(self, name):
+        return getattr(self._conn(), name)
+
+    def __enter__(self):
+        return self._conn().__enter__()
+
+    def __exit__(self, *exc):
+        return self._conn().__exit__(*exc)
+
+    def close(self) -> None:
+        with self._lock:
+            for c in self._all:
+                c.close()
+            self._all.clear()
+        self._local = threading.local()
+
+
 def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
+    conn = ThreadLocalConnection(db_path)
     conn.execute("PRAGMA journal_mode = WAL")
-    return conn
+    return conn  # type: ignore[return-value]  # 介面相容
 
 
 def schema_version(conn: sqlite3.Connection) -> int:
