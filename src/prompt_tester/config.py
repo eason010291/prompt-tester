@@ -23,6 +23,8 @@ class Settings:
     data_dir: Path = PROJECT_ROOT / "data"
     web_dist: Path = PROJECT_ROOT / "web" / "dist"
     providers: dict[str, ProviderKey] = field(default_factory=dict)
+    # 外部 agent（MCP / REST 工具）的存取 token；空字串時只接受本機連線
+    agent_token: str = ""
 
     @property
     def db_path(self) -> Path:
@@ -47,4 +49,5 @@ def load_settings(path: Path | None = None) -> Settings:
         port=server.get("port", Settings.port),
         data_dir=data_dir,
         providers=providers,
+        agent_token=raw.get("agent", {}).get("token", ""),
     )

@@ -47,3 +47,25 @@ def test_load_settings_reads_providers(tmp_path):
     assert s.port == 9000
     assert s.data_dir.name == "d" and s.data_dir.is_absolute()
     assert s.providers["openrouter"].api_key == "k"
+
+
+def test_workspace_roundtrip_and_build(tmp_path):
+    with TestClient(create_app(make_settings(tmp_path))) as client:
+        ws = client.get("/api/workspace").json()
+        assert ws["preset"]["blocks"]
+        # 初始工作區第一次讀取就寫入，區塊 id 之後保持穩定
+        assert client.get("/api/workspace").json()["preset"] == ws["preset"]
+
+        ws["preset"]["name"] = "改名"
+        saved = client.put("/api/workspace", json=ws).json()
+        assert saved["updated_at"]
+        assert client.get("/api/workspace").json()["preset"]["name"] == "改名"
+
+        res = client.post("/api/build", json={"preset": ws["preset"], "context": ws["context"]}).json()
+        assert res["messages"] and res["total_tokens"] > 0
+        assert "{{char}}" not in res["messages"][0]["content"]
+
+        raw = client.post(
+            "/api/build", json={"preset": ws["preset"], "context": ws["context"], "expand_macros": False}
+        ).json()
+        assert "{{char}}" in raw["messages"][0]["content"]

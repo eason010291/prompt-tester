@@ -1,8 +1,16 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { NavLink, Navigate, Route, Routes } from 'react-router'
 import { api, type Health } from './api'
 import { useTheme, type Theme } from './theme'
 import Placeholder from './pages/Placeholder'
+import PromptPage from './pages/PromptPage'
+
+// 次要頁面按需載入（diff、模型列表等套件只在用到時下載）
+const ScenariosPage = lazy(() => import('./pages/ScenariosPage'))
+const SettingsPage = lazy(() => import('./pages/SettingsPage'))
+const VersionsPage = lazy(() => import('./pages/VersionsPage'))
+const ExperimentsPage = lazy(() => import('./pages/ExperimentsPage'))
+const ScriptsPage = lazy(() => import('./pages/ScriptsPage'))
 
 interface Section {
   path: string
@@ -26,6 +34,13 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    path: '/scenarios',
+    label: '情境',
+    hint: '測試輸入與歷史',
+    milestone: 'M2',
+    plans: [],
+  },
+  {
     path: '/versions',
     label: '版本樹',
     hint: '提交、分支、diff',
@@ -42,18 +57,20 @@ const SECTIONS: Section[] = [
   {
     path: '/experiments',
     label: '實驗',
-    hint: '批次生成、評語、比較',
+    hint: '金字塔批次、評語、比較',
     milestone: 'M4–M6',
     plans: ['對話樹與晉級挑選', '自由評語與分數解析', '父子版本並排比較', '依評語由 LLM 修改'],
   },
   {
     path: '/settings',
     label: '設定',
-    hint: '連線、模型、模板',
+    hint: '金鑰、連線、模型',
     milestone: 'M2',
     plans: ['OpenRouter 連線與供應商固定', '模型價格與支援參數', '評語佔位模板'],
   },
 ]
+
+const BUILT = new Set(['/prompt', '/scenarios', '/settings', '/versions', '/experiments', '/scripts'])
 
 const THEMES: { value: Theme; label: string }[] = [
   { value: 'system', label: '系統' },
@@ -93,17 +110,25 @@ export default function App() {
         </div>
       </nav>
       <main className="main">
-        <Routes>
-          <Route path="/" element={<Navigate to="/prompt" replace />} />
-          {SECTIONS.map((s) => (
-            <Route
-              key={s.path}
-              path={s.path}
-              element={<Placeholder title={s.label} milestone={s.milestone} plans={s.plans} />}
-            />
-          ))}
-          <Route path="*" element={<Navigate to="/prompt" replace />} />
-        </Routes>
+        <Suspense fallback={<p className="muted">載入中…</p>}>
+          <Routes>
+            <Route path="/" element={<Navigate to="/prompt" replace />} />
+            <Route path="/prompt" element={<PromptPage />} />
+            <Route path="/scenarios" element={<ScenariosPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/versions" element={<VersionsPage />} />
+            <Route path="/experiments" element={<ExperimentsPage />} />
+            <Route path="/scripts" element={<ScriptsPage />} />
+            {SECTIONS.filter((s) => !BUILT.has(s.path)).map((s) => (
+              <Route
+                key={s.path}
+                path={s.path}
+                element={<Placeholder title={s.label} milestone={s.milestone} plans={s.plans} />}
+              />
+            ))}
+            <Route path="*" element={<Navigate to="/prompt" replace />} />
+          </Routes>
+        </Suspense>
       </main>
     </div>
   )

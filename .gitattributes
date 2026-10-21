@@ -1,0 +1,5 @@
+# 版本庫內一律以 LF 儲存；工作目錄的換行由各平台的 Git 設定決定
+* text=auto
+*.png binary
+*.jpg binary
+*.bat text eol=crlf

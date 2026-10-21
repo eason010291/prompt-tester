@@ -1,22 +1,37 @@
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.routing import Route
 
-from . import __version__, db
+from . import __version__, db, experiments, mcp_server, modifier, scripts, store
 from .config import Settings, load_settings
+from .routes import agent as agent_routes, experiments as experiment_routes, feedback, generate, prompt, runs, scenarios, settings as settings_routes, vcs as vcs_routes
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, http_transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
+    """http_transport：測試時注入假的 LLM 端點。"""
     settings = settings or load_settings()
+    app_ref: dict = {}
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         conn = db.connect(settings.db_path)
         db.migrate(conn)
+        store.mark_stale_running(conn)
+        prompt.migrate_workspace(conn)
+        scripts.ensure_starter(conn)
         app.state.db = conn
-        yield
+        async with httpx.AsyncClient(transport=http_transport, timeout=30) as http:
+            app.state.http = http
+            app.state.experiments = experiments.Manager(conn, http)
+            app.state.modifier = modifier.Manager(conn, http, app.state.experiments)
+            async with app_ref["mcp"].run():
+                yield
+            await app.state.modifier.shutdown()
+            await app.state.experiments.shutdown()
         conn.close()
 
     app = FastAPI(title="Prompt Tester", version=__version__, lifespan=lifespan)
@@ -32,6 +47,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "providers": sorted(settings.providers),
         }
 
+    app.include_router(prompt.router)
+    app.include_router(scenarios.router)
+    app.include_router(settings_routes.router)
+    app.include_router(generate.router)
+    app.include_router(vcs_routes.router)
+    app.include_router(runs.router)
+    app.include_router(feedback.router)
+    app.include_router(experiment_routes.router)
+    app.include_router(agent_routes.router)
+    agent_routes.register_tools(app)
+    # ② MCP（streamable HTTP）：與 REST 工具共用存取檢查
+    app_ref["mcp"] = mcp_server.build(app, lambda: settings.agent_token)
+    app.router.routes.append(
+        Route("/mcp", endpoint=mcp_server.Endpoint(app_ref["mcp"], lambda: settings.agent_token), methods=["GET", "POST", "DELETE"])
+    )
     _mount_frontend(app, settings)
     return app
 
@@ -50,4 +80,5 @@ def _mount_frontend(app: FastAPI, settings: Settings) -> None:
         file = (dist / path).resolve()
         if path and file.is_file() and file.is_relative_to(dist.resolve()):
             return FileResponse(file)
-        return FileResponse(index)
+        # index.html 引用帶 hash 的資源檔，必須每次重新驗證，否則前端更新後會載入舊版
+        return FileResponse(index, headers={"Cache-Control": "no-cache"})
