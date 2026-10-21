@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router'
 import { api } from '../api'
 import { formatCost, useResource } from '../hooks/useResource'
 import { scoreLevel } from './FeedbackBox'
+import ModifyPanel from './ModifyPanel'
 import RunView from './RunView'
 import {
   PROMOTE_LABEL,
@@ -24,6 +25,7 @@ export default function ExperimentView({ id }: { id: number }) {
   const [open, setOpen] = useState<number | null>(null)
   const [pendingA, setPendingA] = useState<number | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
+  const [modify, setModify] = useState(false)
   const d = exp.data
 
   // 執行中每 1.5 秒更新進度
@@ -87,6 +89,9 @@ export default function ExperimentView({ id }: { id: number }) {
               </button>
             ) : (
               <>
+                <button className="btn btn-sm btn-primary" onClick={() => setModify((v) => !v)} title="讓 LLM 讀這個實驗的評語並修改預設">
+                  依評語修改…
+                </button>
                 <button className="btn btn-sm" onClick={rerun} title="用同一份腳本快照與情境，以目前工作區的預設重跑（迴歸比較）">
                   用目前工作區重跑
                 </button>
@@ -118,6 +123,8 @@ export default function ExperimentView({ id }: { id: number }) {
           </p>
         )}
       </div>
+
+      {modify && <ModifyPanel experimentId={d.id} onClose={() => setModify(false)} />}
 
       <div className={`exp-body ${open ? 'has-panel' : ''}`}>
         <div className="stages">

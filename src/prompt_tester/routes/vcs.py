@@ -5,35 +5,24 @@ import sqlite3
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from .. import feedback, vcs
+from .. import feedback, vcs, workspace
 from ..preset import Preset
-from ..store import now_iso
 from .deps import get_db
-from .prompt import WORKSPACE_ID, get_workspace
+from .prompt import WORKSPACE_ID
 
 router = APIRouter(prefix="/api/vcs")
 
 
 def _head(conn: sqlite3.Connection) -> tuple[str | None, str | None]:
-    row = conn.execute("SELECT branch, base_commit FROM workspaces WHERE id = ?", (WORKSPACE_ID,)).fetchone()
-    if row is None:
-        return vcs.DEFAULT_BRANCH, None
-    return row["branch"], row["base_commit"]
+    return workspace.head(conn)
 
 
 def _working(conn: sqlite3.Connection) -> Preset:
-    return get_workspace(conn).preset
+    return workspace.working(conn)
 
 
 def _save_working(conn: sqlite3.Connection, preset: Preset, branch: str | None, base: str | None) -> None:
-    ws = get_workspace(conn)
-    with conn:
-        conn.execute(
-            """INSERT INTO workspaces (id, preset, context, updated_at, branch, base_commit) VALUES (?, ?, ?, ?, ?, ?)
-               ON CONFLICT(id) DO UPDATE SET preset = excluded.preset, updated_at = excluded.updated_at,
-                                             branch = excluded.branch, base_commit = excluded.base_commit""",
-            (WORKSPACE_ID, preset.model_dump_json(), ws.context.model_dump_json(), now_iso(), branch, base),
-        )
+    workspace.save(conn, preset, branch, base)
 
 
 def _error(e: vcs.VcsError, status: int = 422) -> HTTPException:
@@ -70,25 +59,12 @@ class CommitIn(BaseModel):
 
 @router.post("/commit")
 def commit(body: CommitIn, conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    branch, base = _head(conn)
-    preset = body.preset or _working(conn)
-    target = branch or (body.branch or "").strip()
-    if not target:
-        raise HTTPException(422, "目前不在任何分支上（detached），請提供新分支名稱")
-    if branch:
-        ref = vcs.get_ref(conn, branch)
-        if ref and ref["commit_id"] != base:
-            raise HTTPException(409, f"分支「{branch}」已經前進到 {ref['commit_id'][:8]}，請先切換到最新版本")
-    if base and vcs.get_commit(conn, base).tree_id == vcs.tree_id_of(preset):
-        raise HTTPException(422, "沒有變更可以提交")
     try:
-        c = vcs.create_commit(conn, preset, [base] if base else [], body.message)
-        existed = vcs.get_ref(conn, target) is not None
-        vcs.set_ref(conn, target, c.id, "branch", protected=None if existed else target == vcs.DEFAULT_BRANCH)
+        return workspace.commit(conn, body.message, preset=body.preset, new_branch=body.branch).to_dict()
+    except vcs.ConflictError as e:
+        raise _error(e, 409) from e
     except vcs.VcsError as e:
         raise _error(e) from e
-    _save_working(conn, preset, target, c.id)
-    return c.to_dict()
 
 
 @router.get("/log")

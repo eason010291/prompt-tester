@@ -669,3 +669,56 @@ export const USER_SOURCE_LABEL: Record<UserSource, string> = {
   scenario_all: '情境逐回合輸入，不足由 LLM 補',
   llm: '全部由 LLM 扮演',
 }
+
+// ---- LLM 修改（M6） ----
+
+export interface AgentSettings {
+  connection_id: number | null
+  system_prompt: string
+  prompt_history: { text: string; saved_at: string }[]
+  temperature: number
+  max_tokens: number
+  max_steps: number
+  max_tool_calls: number
+  budget_usd: number
+  allow_params: boolean
+  allow_run_experiment: boolean
+}
+
+export interface AgentCall {
+  name: string
+  args: unknown
+  ok: boolean
+  result: string
+}
+
+export interface AgentStep {
+  step: number
+  text: string
+  reasoning: string
+  calls: AgentCall[]
+  cost: number
+  finish_reason: string | null
+  tokens: [number | null, number | null]
+}
+
+export interface AgentRound {
+  id: number
+  created_at: string
+  status: 'running' | 'done' | 'uncommitted' | 'error' | 'cancelled'
+  author: string
+  connection: Connection
+  instructions: string
+  experiment_id: number | null
+  auto_rerun: boolean
+  base_commit: string | null
+  branch: string | null
+  result_commit: string | null
+  rerun_experiment_id: number | null
+  steps?: AgentStep[]
+  step_count?: number
+  final_message: string | null
+  tool_calls: number
+  cost: number
+  error: string | null
+}

@@ -25,6 +25,10 @@ class VcsError(ValueError):
     pass
 
 
+class ConflictError(VcsError):
+    """分支已被別處推進（HTTP 409）。"""
+
+
 def _canon(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 

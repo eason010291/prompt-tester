@@ -4,15 +4,17 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.routing import Route
 
-from . import __version__, db, experiments, scripts, store
+from . import __version__, db, experiments, mcp_server, modifier, scripts, store
 from .config import Settings, load_settings
-from .routes import experiments as experiment_routes, feedback, generate, prompt, runs, scenarios, settings as settings_routes, vcs as vcs_routes
+from .routes import agent as agent_routes, experiments as experiment_routes, feedback, generate, prompt, runs, scenarios, settings as settings_routes, vcs as vcs_routes
 
 
 def create_app(settings: Settings | None = None, http_transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
     """http_transport：測試時注入假的 LLM 端點。"""
     settings = settings or load_settings()
+    app_ref: dict = {}
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -25,7 +27,10 @@ def create_app(settings: Settings | None = None, http_transport: httpx.AsyncBase
         async with httpx.AsyncClient(transport=http_transport, timeout=30) as http:
             app.state.http = http
             app.state.experiments = experiments.Manager(conn, http)
-            yield
+            app.state.modifier = modifier.Manager(conn, http, app.state.experiments)
+            async with app_ref["mcp"].run():
+                yield
+            await app.state.modifier.shutdown()
             await app.state.experiments.shutdown()
         conn.close()
 
@@ -50,6 +55,13 @@ def create_app(settings: Settings | None = None, http_transport: httpx.AsyncBase
     app.include_router(runs.router)
     app.include_router(feedback.router)
     app.include_router(experiment_routes.router)
+    app.include_router(agent_routes.router)
+    agent_routes.register_tools(app)
+    # ② MCP（streamable HTTP）：與 REST 工具共用存取檢查
+    app_ref["mcp"] = mcp_server.build(app, lambda: settings.agent_token)
+    app.router.routes.append(
+        Route("/mcp", endpoint=mcp_server.Endpoint(app_ref["mcp"], lambda: settings.agent_token), methods=["GET", "POST", "DELETE"])
+    )
     _mount_frontend(app, settings)
     return app
 

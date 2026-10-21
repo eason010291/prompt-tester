@@ -137,6 +137,46 @@ async def stream_chat(
         await asyncio.sleep(backoff * 2 ** (attempt - 1))
 
 
+async def chat_complete(
+    client: httpx.AsyncClient,
+    provider: Provider,
+    body: dict,
+    *,
+    max_retries: int = 2,
+    backoff: float = 1.0,
+) -> dict:
+    """非串流呼叫（tool calling 用：tool_calls 與 reasoning_details 需完整取得後原樣送回）。回傳完整回應 JSON。"""
+    headers = {"Content-Type": "application/json", **APP_HEADERS}
+    if provider.api_key:
+        headers["Authorization"] = f"Bearer {provider.api_key}"
+    body = {**body, "stream": False}
+    attempt = 0
+    while True:
+        try:
+            r = await client.post(f"{provider.base_url}/chat/completions", json=body, headers=headers,
+                                  timeout=httpx.Timeout(30, read=600))
+            text = r.text
+            try:
+                data = json.loads(text)
+            except ValueError:
+                data = None
+            if r.status_code >= 400 or data is None:
+                msg = _error_message(data) if isinstance(data, dict) else (text[:500] or r.reason_phrase)
+                raise LLMError(f"HTTP {r.status_code}：{msg}", r.status_code, r.status_code in RETRY_STATUS)
+            if "error" in data and not data.get("choices"):
+                # OpenRouter 上游錯誤可能以 200 + error 回傳
+                raise LLMError(_error_message(data), None, retryable=True)
+            return data
+        except LLMError as e:
+            if not e.retryable or attempt >= max_retries:
+                raise
+        except httpx.TransportError as e:
+            if attempt >= max_retries:
+                raise LLMError(f"連線錯誤：{e.__class__.__name__} {e}") from e
+        attempt += 1
+        await asyncio.sleep(backoff * 2 ** (attempt - 1))
+
+
 async def fetch_generation_stats(client: httpx.AsyncClient, provider: Provider, gen_id: str) -> dict | None:
     """OpenRouter /generation：實際服務的供應商與精確費用。統計會延遲幾秒才可查，失敗回傳 None。"""
     if not provider.is_openrouter or not gen_id or not provider.api_key:

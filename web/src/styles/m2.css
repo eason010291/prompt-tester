@@ -1581,3 +1581,133 @@ label.inline input[type='number'] {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---- LLM 修改（M6） ---- */
+
+.modify-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-xs);
+  border-color: var(--accent);
+}
+
+.modify-panel .list-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.modify-panel textarea {
+  min-height: 70px;
+}
+
+.round {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--s-xs) var(--s-sm);
+  border-radius: var(--r-md);
+  background: var(--bg-soft);
+  border-left: 3px solid var(--accent);
+}
+
+.round-done {
+  border-left-color: var(--success);
+}
+
+.round-error,
+.round-cancelled {
+  border-left-color: var(--error);
+}
+
+.round-uncommitted {
+  border-left-color: var(--warning);
+}
+
+.round-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px var(--s-sm);
+}
+
+.round-head .btn {
+  margin-left: auto;
+}
+
+.steps {
+  margin: 0;
+  padding-left: 1.4em;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.step-text {
+  margin: 0 0 2px;
+  white-space: pre-wrap;
+}
+
+.call summary {
+  cursor: pointer;
+  color: var(--text);
+}
+
+.call.is-error summary {
+  color: var(--error);
+}
+
+.call pre {
+  margin: 4px 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+  background: var(--bg-card);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.call-result {
+  color: var(--text-muted);
+}
+
+.round-result {
+  font-size: 13px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+}
+
+.round-history ul {
+  margin: 4px 0 0;
+  padding-left: 1.2em;
+  font-size: 13px;
+}
+
+.access-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px var(--s-sm);
+  font-size: 13px;
+}
+
+.access-list dt {
+  color: var(--text-muted);
+}
+
+.access-list dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+.tool-list {
+  margin: 4px 0 0;
+  padding-left: 1.2em;
+  font-size: 13px;
+}
+
+.tool-list em {
+  font-style: normal;
+  color: var(--text-muted);
+}

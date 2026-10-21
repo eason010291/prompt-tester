@@ -14,7 +14,7 @@
 | M3 | 預設版本樹（commit、分支、標籤、diff、cherry-pick） | ✅ |
 | M4 | LLM 扮演 {{user}} 的多回合試跑；腳本繼承樹；金字塔實驗（多 seed、溫度掃描、晉級、評審預選、重跑對照） | ✅ |
 | M5 | 評語（自由文字 + 分數解析）、試跑並排比較、盲評、版本平均分 | ✅ |
-| M6 | LLM 修改（內建迴圈 / MCP / REST） | 下一步 |
+| M6 | LLM 依評語修改：內建 tool-calling 迴圈、MCP（HTTP / stdio）、REST 工具；一鍵修改 → 提交 → 重跑 | ✅ |
 
 ## 需求
 
@@ -49,6 +49,20 @@ uv run prompt-tester --reload
 cd web && npm run dev                      # http://localhost:5173
 ```
 
+## 外部 agent 接入（MCP / REST）
+
+修改預設的工具（讀評語、讀 / 改區塊、預覽、提交…）同時以三種方式提供，規則相同：只能改工作區，提交到受保護的 main 時會自動改建 `agent/…` 分支。
+
+```sh
+# Claude Code（伺服器需在執行中）
+claude mcp add --transport http prompt-tester http://127.0.0.1:8000/mcp
+# 只支援 stdio 的客戶端（轉發到執行中的伺服器）
+uv run --directory <專案資料夾> python -m prompt_tester.mcp_stdio   # 環境變數 PROMPT_TESTER_URL
+# REST：POST /api/agent/tools/<工具名稱>，文件見 http://127.0.0.1:8000/docs
+```
+
+預設只接受本機連線。要開放給區網，在 `config.local.toml` 加上 `[agent]` 區段的 `token = "..."`，客戶端以 `Authorization: Bearer <token>` 或 `X-Agent-Token` 標頭帶入。會產生費用的 `run_experiment` 需在設定頁開啟。
+
 ## 測試
 
 ```sh
@@ -69,6 +83,10 @@ cd web && npm run lint && npm run build
 | `src/prompt_tester/vcs.py` | 預設版本庫（blob / tree / commit / ref、diff） |
 | `src/prompt_tester/llm.py` | OpenAI 相容串流 client |
 | `src/prompt_tester/providers.py` | 供應商金鑰與模型目錄 |
+| `src/prompt_tester/scripts.py`、`experiments.py` | 腳本繼承樹、金字塔實驗 |
+| `src/prompt_tester/feedback.py` | 評語與分數 |
+| `src/prompt_tester/agent_tools.py`、`modifier.py` | LLM 修改工具與內建迴圈 |
+| `src/prompt_tester/mcp_server.py`、`mcp_stdio.py` | MCP 接口 |
 | `src/prompt_tester/routes/` | API 路由 |
 | `web/` | React + Vite 前端 |
 | `tests/` | 後端測試 |
