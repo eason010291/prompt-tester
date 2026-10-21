@@ -182,6 +182,7 @@ def get_generation(conn: sqlite3.Connection, gid: int) -> dict | None:
 
 def delete_generation(conn: sqlite3.Connection, gid: int) -> None:
     with conn:
+        conn.execute("DELETE FROM feedback WHERE target_type = 'generation' AND target_id = ?", (gid,))
         conn.execute("DELETE FROM generations WHERE id = ?", (gid,))
 
 
@@ -308,8 +309,8 @@ def finish_run(conn: sqlite3.Connection, run_id: int, *, status: str, error: str
 
 
 def list_runs(conn: sqlite3.Connection, scenario_id: int | None = None, limit: int = 30) -> list[dict]:
-    sql = """SELECT r.id, r.created_at, r.status, r.mode, r.replay_of, r.turns, r.seed, r.preset_name, r.commit_id,
-                    r.scenario_id, r.cost, r.checks, r.error,
+    sql = """SELECT r.id, r.created_at, r.status, r.mode, r.replay_of, r.turns, r.seed, r.preset_name, r.preset_hash,
+                    r.commit_id, r.scenario_id, json_extract(r.scenario, '$.name') AS scenario_name, r.cost, r.checks, r.error,
                     json_extract(r.connection, '$.name') AS connection_name,
                     json_extract(r.user_connection, '$.name') AS user_connection_name,
                     (SELECT COUNT(*) FROM run_messages m WHERE m.run_id = r.id AND m.role = 'assistant') AS replies
@@ -351,5 +352,6 @@ def run_user_turns(conn: sqlite3.Connection, run_id: int) -> list[str]:
 
 def delete_run(conn: sqlite3.Connection, run_id: int) -> None:
     with conn:
+        conn.execute("DELETE FROM feedback WHERE run_id = ?", (run_id,))
         conn.execute("DELETE FROM run_messages WHERE run_id = ?", (run_id,))
         conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))

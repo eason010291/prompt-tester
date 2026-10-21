@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from .. import providers, store, vcs
+from .. import feedback, providers, store, vcs
 from ..preset import Preset
 from ..runner import RunSpec, UserSimSettings, run_session
 from .deps import get_db, get_http
@@ -79,7 +79,10 @@ async def start_run(
 
     settings = load_user_sim(conn)
     user_conn = user_provider = None
-    needs_llm_user = req.mode == "live" or req.turns > len(replay)
+    # 只有真的會呼叫模擬使用者時才要求連線（例如 1 回合且第一句取自情境就不需要）
+    has_first = req.first_from_scenario and any(t.strip() for t in scenario.user_turns)
+    scripted = len(replay) if req.mode == "replay" else int(has_first)
+    needs_llm_user = req.turns > scripted
     if needs_llm_user:
         if settings.connection_id is None:
             raise HTTPException(422, "尚未設定模擬使用者的連線（設定頁 → 模擬使用者）")
@@ -120,7 +123,11 @@ async def start_run(
 
 @router.get("/runs")
 def list_runs(scenario_id: int | None = None, limit: int = 30, conn: sqlite3.Connection = Depends(get_db)) -> list[dict]:
-    return store.list_runs(conn, scenario_id, min(limit, 200))
+    runs = store.list_runs(conn, scenario_id, min(limit, 500))
+    scores = feedback.overall_by_run(conn)
+    for r in runs:
+        r["score"] = scores.get(r["id"])
+    return runs
 
 
 @router.get("/runs/{run_id}")

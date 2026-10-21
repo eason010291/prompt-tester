@@ -48,7 +48,8 @@ def get_workspace(conn: sqlite3.Connection = Depends(get_db)) -> Workspace:
         "SELECT preset, context, updated_at, branch, base_commit FROM workspaces WHERE id = ?", (WORKSPACE_ID,)
     ).fetchone()
     if row is None:
-        return Workspace(preset=starter_preset(), context=_context_for(_first_scenario(conn)))
+        # 立即寫入：starter_preset() 每次產生新的區塊 id，不存起來的話版本與試跑會對不上
+        return put_workspace(Workspace(preset=starter_preset(), context=_context_for(_first_scenario(conn))), conn)
     return Workspace(
         preset=Preset.model_validate_json(row["preset"]),
         context=PreviewContext.model_validate_json(row["context"]),

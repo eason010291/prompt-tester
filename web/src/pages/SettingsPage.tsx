@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import { formatPrice, useAutosave, useResource } from '../hooks/useResource'
+import { parseScores, setCachedTemplate } from '../lib/feedback'
 import {
   newConnection,
   type Connection,
@@ -87,6 +88,7 @@ export default function SettingsPage() {
       </section>
 
       <UserSimCard connections={connections.data ?? []} onQuickAdd={() => add(QUICK_ADD[0].conn, false)} />
+      <FeedbackTemplateCard />
     </div>
   )
 }
@@ -539,6 +541,49 @@ function UserSimForm({ initial, connections, onQuickAdd }: UserSimProps & { init
       </label>
       <div className="add-bar">
         <button className="btn btn-sm" onClick={resetTemplate}>
+          還原預設模板
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function FeedbackTemplateCard() {
+  const { data } = useResource<{ text: string }>('/feedback-template')
+  return data ? <FeedbackTemplateForm initial={data.text} /> : null
+}
+
+function FeedbackTemplateForm({ initial }: { initial: string }) {
+  const [text, setText] = useState(initial)
+  const state = useAutosave(text, async (v) => {
+    await api('/feedback-template', { method: 'PUT', body: JSON.stringify({ text: v }) })
+    setCachedTemplate(v)
+  })
+  const names = Object.keys(parseScores(text.replace(/_\/10/g, '5/10')))
+
+  const reset = async () => {
+    if (!window.confirm('把評語模板還原成預設內容？')) return
+    const t = await api<{ text: string }>('/feedback-template', { method: 'PUT', body: '{}' })
+    setCachedTemplate(t.text)
+    setText(t.text)
+  }
+
+  return (
+    <section className="card">
+      <div className="list-head">
+        <h2>評語模板</h2>
+        <span className={`save-state save-${state}`}>{SAVE_LABEL[state]}</span>
+      </div>
+      <p className="muted small">
+        新增評語時預先填入的文字，只是佔位，評的時候可以任意增刪。任何「名稱：數字/10」的行都會被解析成分數（「_/10」視為未填）。
+      </p>
+      <label className="stack">
+        模板內容
+        <textarea className="tall" value={text} onChange={(e) => setText(e.target.value)} />
+      </label>
+      <div className="add-bar">
+        <span className="muted small">{names.length ? `模板裡的評分屬性：${names.join('、')}` : '模板裡沒有評分行'}</span>
+        <button className="btn btn-sm" onClick={reset}>
           還原預設模板
         </button>
       </div>

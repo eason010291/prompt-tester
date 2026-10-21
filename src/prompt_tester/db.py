@@ -151,6 +151,24 @@ MIGRATIONS: list[tuple[int, str]] = [
         CREATE INDEX run_messages_run ON run_messages(run_id, idx);
         """,
     ),
+    (
+        6,
+        # M5：人工評語（自由文字 + 解析出的分數）
+        """
+        CREATE TABLE feedback (
+            id          INTEGER PRIMARY KEY,
+            target_type TEXT NOT NULL CHECK (target_type IN ('run', 'run_message', 'generation')),
+            target_id   INTEGER NOT NULL,
+            run_id      INTEGER,               -- 試跑或其訊息的評語，方便彙總
+            text        TEXT NOT NULL,
+            scores      TEXT NOT NULL,         -- {"屬性": 分數}
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL
+        );
+        CREATE INDEX feedback_target ON feedback(target_type, target_id);
+        CREATE INDEX feedback_run ON feedback(run_id);
+        """,
+    ),
 ]
 
 

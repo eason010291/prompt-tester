@@ -2,11 +2,13 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { api } from '../api'
 import DiffView from '../components/DiffView'
+import { scoreLevel } from '../components/FeedbackBox'
 import { useResource } from '../hooks/useResource'
 import { useWorkspace } from '../hooks/useWorkspace'
 import { layoutGraph, type GraphRow } from '../lib/graph'
 import {
   authorLabel,
+  formatScore,
   shortId,
   type BlockDiff,
   type Commit,
@@ -184,6 +186,12 @@ export default function VersionsPage() {
                   <div className="muted small">
                     <code>{shortId(c.id)}</code> · {authorLabel(c.author)} · {timeAgo(c.created_at)}
                     {c.generations ? ` · ${c.generations} 次生成` : ''}
+                    {c.runs ? ` · ${c.runs} 次試跑` : ''}
+                    {c.score && (
+                      <span className="chip score-chip" data-level={scoreLevel(c.score.overall)} title={`${c.score.scored} 個分數的平均`}>
+                        ★ {formatScore(c.score.overall)}
+                      </span>
+                    )}
                   </div>
                 </div>
               </li>

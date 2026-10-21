@@ -52,7 +52,9 @@ def test_load_settings_reads_providers(tmp_path):
 def test_workspace_roundtrip_and_build(tmp_path):
     with TestClient(create_app(make_settings(tmp_path))) as client:
         ws = client.get("/api/workspace").json()
-        assert ws["updated_at"] is None and ws["preset"]["blocks"]
+        assert ws["preset"]["blocks"]
+        # 初始工作區第一次讀取就寫入，區塊 id 之後保持穩定
+        assert client.get("/api/workspace").json()["preset"] == ws["preset"]
 
         ws["preset"]["name"] = "改名"
         saved = client.put("/api/workspace", json=ws).json()
