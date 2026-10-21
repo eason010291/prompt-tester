@@ -1,5 +1,6 @@
 """多回合試跑（LLM 扮演 {{user}} / 回放）與模擬使用者設定。"""
 
+import json
 import sqlite3
 
 import httpx
@@ -9,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from .. import feedback, providers, store, vcs
 from ..preset import Preset
-from ..runner import RunSpec, UserSimSettings, run_session
+from ..runner import RunSpec, UserSimSettings, run_session, scripted_turns
 from .deps import get_db, get_http
 
 router = APIRouter(prefix="/api")
@@ -80,9 +81,9 @@ async def start_run(
     settings = load_user_sim(conn)
     user_conn = user_provider = None
     # 只有真的會呼叫模擬使用者時才要求連線（例如 1 回合且第一句取自情境就不需要）
-    has_first = req.first_from_scenario and any(t.strip() for t in scenario.user_turns)
-    scripted = len(replay) if req.mode == "replay" else int(has_first)
-    needs_llm_user = req.turns > scripted
+    scripted = scripted_turns(scenario, "scenario_first" if req.first_from_scenario else "llm")
+    covered = set(range(1, len(replay) + 1)) if req.mode == "replay" else set(scripted)
+    needs_llm_user = any(t not in covered for t in range(1, req.turns + 1))
     if needs_llm_user:
         if settings.connection_id is None:
             raise HTTPException(422, "尚未設定模擬使用者的連線（設定頁 → 模擬使用者）")
@@ -115,15 +116,20 @@ async def start_run(
         user_connection=user_conn,
         user_provider=user_provider,
         user_settings=settings,
-        first_from_scenario=req.first_from_scenario,
+        scripted_user_turns=scripted,
     )
     return StreamingResponse(run_session(conn, http, spec, run_id), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache"})
 
 
 @router.get("/runs")
-def list_runs(scenario_id: int | None = None, limit: int = 30, conn: sqlite3.Connection = Depends(get_db)) -> list[dict]:
-    runs = store.list_runs(conn, scenario_id, min(limit, 500))
+def list_runs(
+    scenario_id: int | None = None,
+    limit: int = 30,
+    standalone: bool = False,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> list[dict]:
+    runs = store.list_runs(conn, scenario_id, min(limit, 500), standalone=standalone)
     scores = feedback.overall_by_run(conn)
     for r in runs:
         r["score"] = scores.get(r["id"])
@@ -131,10 +137,14 @@ def list_runs(scenario_id: int | None = None, limit: int = 30, conn: sqlite3.Con
 
 
 @router.get("/runs/{run_id}")
-def get_run(run_id: int, requests: bool = False, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+def get_run(run_id: int, requests: bool = False, preset: bool = False, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """preset：附上這次試跑使用的預設快照（前端套正則渲染用）。"""
     run = store.get_run(conn, run_id, with_requests=requests)
     if run is None:
         raise HTTPException(404, f"找不到試跑 #{run_id}")
+    if preset:
+        row = conn.execute("SELECT data FROM preset_snapshots WHERE hash = ?", (run["preset_hash"],)).fetchone()
+        run["preset"] = json.loads(row["data"]) if row else None
     return run
 
 

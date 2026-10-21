@@ -249,8 +249,22 @@ class RunSpec:
     user_connection: Connection | None = None
     user_provider: providers.Provider | None = None
     user_settings: UserSimSettings = field(default_factory=UserSimSettings)
-    # 第 1 回合優先使用情境的第一句使用者輸入
-    first_from_scenario: bool = True
+    # 預先寫好的使用者發言：{全域回合數: 內容}
+    scripted_user_turns: dict[int, str] = field(default_factory=dict)
+    # 接續既有分支（晉級）：情境快照的歷史已含先前的對話，回合數從 turn_offset + 1 起算
+    turn_offset: int = 0
+    # 溫度掃描：覆寫預設的溫度
+    temperature: float | None = None
+
+
+def scripted_turns(scenario: Scenario, source: str) -> dict[int, str]:
+    """source：scenario_first（第一句）／scenario_all（逐回合，空白的由 LLM 補）／llm（全部 LLM）。"""
+    if source == "scenario_all":
+        return {i + 1: t for i, t in enumerate(scenario.user_turns) if t.strip()}
+    if source == "scenario_first":
+        first = next((t for t in scenario.user_turns if t.strip()), "")
+        return {1: first} if first else {}
+    return {}
 
 
 async def run_session(
@@ -259,7 +273,6 @@ async def run_session(
     sc = spec.scenario
     names = sc.names()
     history: list[HistoryMessage] = sc.chat()
-    first_line = next((t for t in sc.user_turns if t.strip()), "")
     total_cost = 0.0
     idx = 0
     status, run_error = "done", None
@@ -285,13 +298,13 @@ async def run_session(
 
     yield sse({"type": "start", "run_id": run_id, "turns": spec.turns, "history": [h.model_dump() for h in history]})
     try:
-        for turn in range(1, spec.turns + 1):
+        for turn in range(spec.turn_offset + 1, spec.turn_offset + spec.turns + 1):
             # 1. 使用者發言
             yield sse({"type": "message_start", "turn": turn, "role": "user"})
             if spec.mode == "replay" and turn <= len(spec.replay_user_turns):
                 text, source, r, req = spec.replay_user_turns[turn - 1], "replay", None, None
-            elif turn == 1 and spec.first_from_scenario and first_line:
-                text, source, r, req = first_line, "scenario", None, None
+            elif turn in spec.scripted_user_turns:
+                text, source, r, req = spec.scripted_user_turns[turn], "scenario", None, None
             else:
                 if spec.user_connection is None or spec.user_provider is None:
                     raise RuntimeError("沒有設定模擬使用者的連線（設定頁 → 模擬使用者）")
@@ -324,9 +337,10 @@ async def run_session(
             # 2. 角色回覆
             yield sse({"type": "message_start", "turn": turn, "role": "assistant"})
             built = build(spec.preset, history, names, seed=spec.seed + turn, card=sc.card, persona=sc.persona)
-            if turn == 1:
+            if turn == spec.turn_offset + 1:
                 build_warnings = built.warnings
-            req = request_body(built.to_api(), spec.preset.params, spec.connection, spec.seed + turn, spec.provider)
+            req = request_body(built.to_api(), spec.preset.params, spec.connection, spec.seed + turn, spec.provider,
+                               temperature=spec.temperature)
             r = CallResult()
             async for ev in stream_call(http, spec.provider, req, r, lookup_stats=lookup_stats):
                 yield sse(ev)
