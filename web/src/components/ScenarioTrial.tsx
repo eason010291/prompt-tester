@@ -4,9 +4,12 @@ import { api, streamApi } from '../api'
 import { formatCost, useResource } from '../hooks/useResource'
 import { collectScriptSets } from '../lib/st/scripts'
 import { makeMacro } from '../lib/st/regex'
+import FeedbackBox from './FeedbackBox'
 import {
+  formatScore,
   shortId,
   type Connection,
+  type Feedback,
   type HistoryMessage,
   type Run,
   type RunEvent,
@@ -61,6 +64,12 @@ export default function ScenarioTrial({ scenario, saved, suggestPreflight }: Pro
   const [firstFromScenario, setFirstFromScenario] = useState(true)
   const [live, setLive] = useState<Live>(IDLE)
   const abort = useRef<AbortController | null>(null)
+  // 試跑結束（或打開舊紀錄）後才能寫評語
+  const feedback = useResource<Feedback[]>(live.run ? `/feedback?run_id=${live.run.id}` : null)
+  const onFeedback = () => {
+    feedback.reload()
+    runs.reload()
+  }
 
   const preset = ws.data?.preset
   const conn = connections.data?.find((c) => c.id === connId) ?? connections.data?.[0] ?? null
@@ -249,6 +258,8 @@ export default function ScenarioTrial({ scenario, saved, suggestPreflight }: Pro
               scenario={scenario}
               scriptSets={scriptSets}
               macro={macro}
+              feedback={live.run ? (feedback.data ?? []).filter((f) => f.target_type === 'run_message' && f.target_id === m.id) : null}
+              onFeedback={onFeedback}
             />
           ))}
           {live.streaming && (
@@ -280,6 +291,20 @@ export default function ScenarioTrial({ scenario, saved, suggestPreflight }: Pro
               )}
             </div>
           )}
+          {live.run && feedback.data && (
+            <FeedbackBox
+              targetType="run"
+              targetId={live.run.id}
+              items={feedback.data.filter((f) => f.target_type === 'run')}
+              onChanged={onFeedback}
+              label="整體評語"
+            />
+          )}
+          {live.run && (
+            <p className="muted small">
+              <Link to={`/experiments?a=${live.run.id}`}>到「實驗」頁與其他試跑並排比較 →</Link>
+            </p>
+          )}
         </div>
       )}
 
@@ -294,6 +319,7 @@ export default function ScenarioTrial({ scenario, saved, suggestPreflight }: Pro
                   <span className="gen-meta">
                     #{r.id} · {r.mode === 'live' ? '即時' : `回放 #${r.replay_of}`} · {r.replies}/{r.turns} 回合 · {r.preset_name}
                     {r.commit_id && ` @${shortId(r.commit_id)}`} · {formatCost(r.cost)}
+                    {r.score != null && <b className="run-score"> · ★ {formatScore(r.score)}</b>}
                   </span>
                   <span className="gen-excerpt">
                     {r.error ??
@@ -320,12 +346,17 @@ function Bubble({
   scenario,
   scriptSets,
   macro,
+  feedback,
+  onFeedback,
 }: {
   m: RunMessage
   depth: number
   scenario: Scenario
   scriptSets: ReturnType<typeof collectScriptSets>
   macro: ReturnType<typeof makeMacro>
+  /** null：試跑還在進行，不能評 */
+  feedback: Feedback[] | null
+  onFeedback: () => void
 }) {
   const isUser = m.role === 'user'
   return (
@@ -351,6 +382,7 @@ function Bubble({
       )}
       {m.error && <p className="alert alert-error">{m.error}</p>}
       {m.finish_reason === 'length' && <p className="alert">被 max_tokens 截斷</p>}
+      {feedback && !isUser && <FeedbackBox targetType="run_message" targetId={m.id} items={feedback} onChanged={onFeedback} compact />}
     </div>
   )
 }

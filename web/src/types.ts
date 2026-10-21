@@ -384,6 +384,9 @@ export interface Commit {
   created_at: string
   meta: Record<string, unknown>
   generations?: number
+  runs?: number
+  /** 這個版本所有試跑 / 生成評語的分數平均 */
+  score?: { overall: number; scored: number } | null
 }
 
 export interface Ref {
@@ -484,17 +487,22 @@ export interface RunSummary {
   turns: number
   seed: number
   preset_name: string
+  preset_hash: string
   commit_id: string | null
   scenario_id: number | null
+  scenario_name: string | null
   cost: number | null
   checks: RunChecks | null
   error: string | null
   connection_name: string | null
   user_connection_name: string | null
   replies: number
+  /** 評語分數的整體平均 */
+  score: number | null
 }
 
-export interface Run extends Omit<RunSummary, 'connection_name' | 'user_connection_name' | 'replies'> {
+export interface Run
+  extends Omit<RunSummary, 'scenario_name' | 'connection_name' | 'user_connection_name' | 'replies' | 'score'> {
   scenario: Scenario
   messages: RunMessage[]
 }
@@ -506,3 +514,36 @@ export type RunEvent =
   | { type: 'meta'; provider: string | null }
   | { type: 'message_done'; message: RunMessage }
   | { type: 'done'; run: Run }
+
+// ---- 評語與比較（M5） ----
+
+export type FeedbackTarget = 'run' | 'run_message' | 'generation'
+
+export interface Feedback {
+  id: number
+  target_type: FeedbackTarget
+  target_id: number
+  run_id: number | null
+  text: string
+  scores: Record<string, number>
+  created_at: string
+  updated_at: string
+}
+
+export interface ScoreSummary {
+  attributes: Record<string, number>
+  counts: Record<string, number>
+  overall: number | null
+  feedback_count: number
+}
+
+export type ComparedRun = Run & { connection: Connection; preset: Preset | null; feedback: Feedback[]; scores: ScoreSummary }
+
+export interface RunCompare {
+  a: ComparedRun
+  b: ComparedRun
+  same_preset: boolean
+  diff: PresetDiff | null
+}
+
+export const formatScore = (v: number | null | undefined) => (v == null ? '—' : Number.isInteger(v) ? String(v) : v.toFixed(1))

@@ -5,7 +5,7 @@ import sqlite3
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from .. import vcs
+from .. import feedback, vcs
 from ..preset import Preset
 from ..store import now_iso
 from .deps import get_db
@@ -98,8 +98,16 @@ def log(limit: int = 500, conn: sqlite3.Connection = Depends(get_db)) -> dict:
         r["commit_id"]: r["n"]
         for r in conn.execute("SELECT commit_id, COUNT(*) AS n FROM generations WHERE commit_id IS NOT NULL GROUP BY commit_id")
     }
+    runs = {
+        r["commit_id"]: r["n"]
+        for r in conn.execute("SELECT commit_id, COUNT(*) AS n FROM runs WHERE commit_id IS NOT NULL GROUP BY commit_id")
+    }
+    scores = feedback.overall_by_commit(conn)
     return {
-        "commits": [c.to_dict() | {"generations": counts.get(c.id, 0)} for c in vcs.log(conn, min(limit, 2000))],
+        "commits": [
+            c.to_dict() | {"generations": counts.get(c.id, 0), "runs": runs.get(c.id, 0), "score": scores.get(c.id)}
+            for c in vcs.log(conn, min(limit, 2000))
+        ],
         "refs": vcs.list_refs(conn),
         "head": {"branch": branch, "base_commit": base},
     }
