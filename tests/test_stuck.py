@@ -108,14 +108,14 @@ def test_cancel_one_branch_retry_others_and_resume(setup):
     # 續跑本階段未完成的分支（只有使用者發言 → 接著產生角色回覆，不重產使用者發言）
     t.hang_seeds = set()
     msgs_before = c.get(f"/api/runs/{stuck['id']}").json()["messages"]
-    r = c.post(f"/api/experiments/{eid}/retry", json={"resume_stage": 0}).json()
+    r = c.post(f"/api/experiments/{eid}/retry", json={"stage": {"stage": 0, "kind": "resume"}}).json()
     assert r["started"] == [stuck["id"]]
     d = until(lambda: (x := status(c, eid))["status"] != "running" and x)
     msgs = c.get(f"/api/runs/{stuck['id']}").json()["messages"]
     assert msgs[0] == msgs_before[0] and [(m["turn"], m["role"]) for m in msgs] == [(1, "user"), (1, "assistant")]
     assert next(r for r in d["runs"] if r["id"] == stuck["id"])["status"] == "done"
     # 已完成的再續跑 → 422（沒有可續跑的回合）
-    r = c.post(f"/api/experiments/{eid}/retry", json={"items": [{"run_id": stuck["id"]}]})
+    r = c.post(f"/api/experiments/{eid}/retry", json={"items": [{"run_id": stuck["id"], "kind": "resume"}]})
     assert r.status_code == 422 and "已經跑完" in r.json()["detail"]
 
 
@@ -130,7 +130,7 @@ def test_resume_after_error_and_mid_run(setup, monkeypatch):
     before = c.get(f"/api/runs/{run['id']}").json()["messages"]
     assert [(m["turn"], m["role"], bool(m["error"])) for m in before][-1] == (2, "assistant", True)
     t.hang_seeds = set()
-    c.post(f"/api/experiments/{eid}/retry", json={"items": [{"run_id": run["id"]}]})
+    c.post(f"/api/experiments/{eid}/retry", json={"items": [{"run_id": run["id"], "kind": "resume"}]})
     until(lambda: status(c, eid)["status"] != "running")
     after = c.get(f"/api/runs/{run['id']}").json()["messages"]
     assert [(m["turn"], m["role"]) for m in after] == [(1, "user"), (1, "assistant"), (2, "user"), (2, "assistant"), (3, "user"), (3, "assistant")]

@@ -125,14 +125,18 @@ def _excerpt(text: str, n: int = 140) -> str:
     return t[:n] + ("…" if len(t) > n else "")
 
 
-def pair_keys(runs: list[dict]) -> dict[int, tuple]:
-    """(階段, 情境, 溫度, seed, 父分支的 key)：同一腳本的兩次實驗中位置相同的分支有相同的 key。"""
+def pair_keys(runs: list[dict], origin_keys: dict[int, tuple] | None = None) -> dict[int, tuple]:
+    """(階段, 情境, 溫度, seed, 父分支的 key)：同一腳本的兩次實驗中位置相同的分支有相同的 key。
+    部分迴歸的分支直接沿用原分支（origin_run_id）的 key。"""
     by_id = {r["id"]: r for r in runs}
     keys: dict[int, tuple] = {}
 
     def key(rid: int) -> tuple:
         if rid not in keys:
             r = by_id[rid]
+            if r.get("origin_run_id") and origin_keys and r["origin_run_id"] in origin_keys:
+                keys[rid] = origin_keys[r["origin_run_id"]]
+                return keys[rid]
             parent = key(r["parent_run_id"]) if r["parent_run_id"] in by_id else None
             keys[rid] = (r["stage"], r["scenario_id"], r["temperature"], r["seed"], parent)
         return keys[rid]
@@ -161,8 +165,9 @@ def detail(conn: sqlite3.Connection, exp_id: int) -> dict | None:
         r["excerpt"] = _excerpt(last.get(r["id"], ""))
         r["counterpart"] = None
     if exp["rerun_of"]:
-        mine = pair_keys(runs)
-        theirs = {k: rid for rid, k in pair_keys(store.list_runs(conn, limit=10_000, experiment_id=exp["rerun_of"])).items()}
+        origin_keys = pair_keys(store.list_runs(conn, limit=10_000, experiment_id=exp["rerun_of"]))
+        mine = pair_keys(runs, origin_keys)
+        theirs = {k: rid for rid, k in origin_keys.items()}
         for r in runs:
             r["counterpart"] = theirs.get(mine[r["id"]])
         # 原實驗被晉級的分支，供「照原實驗晉級」預選
@@ -296,6 +301,7 @@ def _spec_for(conn: sqlite3.Connection, run_id: int, exp: dict) -> RunSpec:
     us = dict(run["user_settings"] or {})
     source, offset = us.pop("user_source", "scenario_first"), us.pop("turn_offset", 0)
     manual = {int(t): v for t, v in (us.pop("manual_turns", None) or {}).items()}
+    keep = {int(t): (v[0], v[1]) for t, v in (us.pop("keep_turns", None) or {}).items()}
     settings = UserSimSettings.model_validate(us)
     user_conn = user_provider = None
     if settings.connection_id is not None:
@@ -309,7 +315,7 @@ def _spec_for(conn: sqlite3.Connection, run_id: int, exp: dict) -> RunSpec:
         preset=preset, scenario=scenario, connection=connection, provider=provider, turns=run["turns"],
         seed=run["seed"], mode="live", user_connection=user_conn, user_provider=user_provider,
         user_settings=settings, scripted_user_turns=scripted_turns(root, source), turn_offset=offset,
-        temperature=run["temperature"], manual_user_turns=manual,
+        temperature=run["temperature"], manual_user_turns=manual, keep_user_turns=keep,
     )
 
 
@@ -447,16 +453,28 @@ class Manager:
 
     # ---- 重試 ----
 
-    def retry(
-        self, exp_id: int, targets: list[tuple[int, int | None, str | None]], *, user_text: str | None = None,
-        later_users: str = "regenerate",
-    ) -> dict:
-        """targets：(run_id, 回合, 角色)。刪除該訊息與之後的訊息（封存），重新產生並續跑到原本的回合數。
-        回合為 None 表示「續跑」：從中斷處（或出錯的最後一則）接著跑完。
+    def descendants(self, run_id: int) -> list[int]:
+        """接在這條分支後面的所有分支（下一階段、再下一階段…），由近到遠。"""
+        out, frontier = [], [run_id]
+        while frontier:
+            kids = [r["id"] for f in frontier
+                    for r in self.conn.execute("SELECT id FROM runs WHERE parent_run_id = ? ORDER BY id", (f,))]
+            out += kids
+            frontier = kids
+        return out
 
-        其他分支還在執行時也可以重試已結束的分支；執行中 / 排隊中的分支本身不能重試。
-        user_text：重試使用者發言時改用這段手動輸入；省略則由模擬使用者重新產生。
-        later_users：keep = 之後的回合沿用原本的使用者發言；regenerate = 重新產生。
+    def retry(
+        self, exp_id: int, targets: list[dict], *, user_text: str | None = None, later_users: str = "regenerate",
+        tags: list[str] | None = None, note: str = "", scope: str | None = None,
+    ) -> dict:
+        """重試（同一個版本重新抽樣）。targets 每項：{run_id, kind, turn, role}
+
+        - kind=message：刪除（封存）該訊息與之後的訊息，重新產生並續跑到原本的回合數
+        - kind=branch：整條分支（本段）重新產生
+        - kind=resume：從中斷處接著跑（最後一則出錯就重試它）
+        接在後面的下一階段分支會連帶封存，等上層跑完後以新的對話重建並重跑。
+        user_text：重試使用者發言時改用這段手動輸入。later_users：keep 沿用之後的使用者發言 / regenerate 重新產生。
+        tags / note：重試原因（使用者勾選的標籤與「其他」說明），記入 retry_log。
         """
         conn = self.conn
         exp = get_raw(conn, exp_id)
@@ -466,82 +484,172 @@ class Manager:
             raise ExperimentError("later_users 必須是 keep 或 regenerate")
         if user_text is not None and not user_text.strip():
             raise ExperimentError("手動輸入的使用者發言不能是空的")
+
+        busy = lambda rid: rid in self.run_tasks or (store.get_run(conn, rid) or {}).get("status") in ("queued", "running")  # noqa: E731
+        root_ids = {t["run_id"] for t in targets}
         plans: list[tuple[int, RunSpec]] = []
         cuts: list[tuple[int, int, str]] = []  # (run, 從哪個 idx 起封存, 說明)
+        logs: list[dict] = []
         skipped: list[dict] = []
-        for rid, turn, role in targets:
+        cascade: dict[int, list[int]] = {}
+        child_keep: dict[int, dict[int, tuple[str, str]]] = {}
+        seen: set[int] = set()
+
+        for t in targets:
+            rid, kind, turn, role = t["run_id"], t.get("kind", "message"), t.get("turn"), t.get("role")
             run = store.get_run(conn, rid)
-            reason = None
             if run is None or run["experiment_id"] != exp_id:
-                reason = "不屬於這個實驗"
-            elif run["status"] in ("queued", "running") or rid in self.run_tasks:
-                reason = "還在執行中（可以先中止這條）"
-            elif conn.execute("SELECT 1 FROM runs WHERE parent_run_id = ? LIMIT 1", (rid,)).fetchone():
-                reason = "已有下一階段的分支接續它，重試會讓接續的分支失去依據"
-            if reason:
-                skipped.append({"run_id": rid, "reason": reason})
+                skipped.append({"run_id": rid, "reason": "不屬於這個實驗"})
+                continue
+            # 被其他目標連帶處理的分支不重複排入
+            if any(rid in self.descendants(other) for other in root_ids if other != rid):
+                skipped.append({"run_id": rid, "reason": "上層分支也在這次重試中，會連帶重跑"})
+                continue
+            if busy(rid):
+                skipped.append({"run_id": rid, "reason": "還在執行中（可以先中止這條）"})
+                continue
+            desc = self.descendants(rid)
+            if any(busy(d) for d in desc):
+                skipped.append({"run_id": rid, "reason": "接在後面的分支還在執行中"})
                 continue
             msgs = run["messages"]
             spec = _spec_for(conn, rid, exp)
             end_turn = spec.turn_offset + spec.turns
-            if turn is None:
-                # 續跑：從中斷處接著跑（最後一則出錯就重試它）
-                last = msgs[-1] if msgs else None
-                if last is not None and last["error"]:
-                    turn, role = last["turn"], last["role"]
-                elif last is None:
-                    spec.start_turn, cut_from, what = spec.turn_offset + 1, 1, "從頭續跑"
-                elif last["role"] == "user":
-                    spec.start_turn, spec.skip_user_at_start = last["turn"], True
-                    cut_from, what = last["idx"] + 1, f"第 {last['turn']} 回合續跑"
-                elif last["turn"] >= end_turn:
-                    skipped.append({"run_id": rid, "reason": "已經跑完，沒有可續跑的回合"})
-                    continue
-                else:
-                    spec.start_turn, cut_from, what = last["turn"] + 1, last["idx"] + 1, f"第 {last['turn'] + 1} 回合續跑"
-                if turn is None:
-                    spec.resume_messages = msgs
-                    retries = conn.execute("SELECT COUNT(DISTINCT archived_at) FROM run_message_archive WHERE run_id = ?",
-                                           (rid,)).fetchone()[0]
-                    spec.seed_offset = 1000 * retries
-                    plans.append((rid, spec))
-                    cuts.append((rid, cut_from, what))
-                    continue
-            target = next((m for m in msgs if m["turn"] == turn and m["role"] == role), None)
-            if target is None:
-                skipped.append({"run_id": rid, "reason": f"沒有第 {turn} 回合的{'使用者發言' if role == 'user' else '角色回覆'}"})
-                continue
-            spec.resume_messages = [m for m in msgs if m["idx"] < target["idx"]]
-            spec.start_turn = turn
-            spec.skip_user_at_start = role == "assistant"
-            if role == "user":
-                if user_text is not None:
-                    spec.manual_user_turns = {**spec.manual_user_turns, turn: user_text}
-                else:
-                    spec.force_llm_user_turn = turn
-            if later_users == "keep":
-                spec.keep_user_turns = {m["turn"]: (m["content"], m["source"]) for m in msgs
-                                        if m["role"] == "user" and m["turn"] > turn and not m["error"]}
             retries = conn.execute("SELECT COUNT(DISTINCT archived_at) FROM run_message_archive WHERE run_id = ?",
                                    (rid,)).fetchone()[0]
-            spec.seed_offset = 1000 * (retries + 1)
+            log_kind = "manual"
+            if kind == "resume":
+                log_kind = "error"
+                last = msgs[-1] if msgs else None
+                if last is not None and last["error"]:
+                    kind, turn, role = "message", last["turn"], last["role"]
+                else:
+                    if last is None:
+                        spec.start_turn, cut_from, what = spec.turn_offset + 1, 1, "從頭續跑"
+                    elif last["role"] == "user":
+                        spec.start_turn, spec.skip_user_at_start = last["turn"], True
+                        cut_from, what = last["idx"] + 1, f"第 {last['turn']} 回合續跑"
+                    elif last["turn"] >= end_turn:
+                        skipped.append({"run_id": rid, "reason": "已經跑完，沒有可續跑的回合"})
+                        continue
+                    else:
+                        spec.start_turn, cut_from, what = last["turn"] + 1, last["idx"] + 1, f"第 {last['turn'] + 1} 回合續跑"
+                    spec.resume_messages = msgs
+                    spec.seed_offset = 1000 * retries
+            if kind == "branch":
+                spec.start_turn, cut_from, what = spec.turn_offset + 1, 1, "整條分支重新產生"
+                if later_users == "keep":
+                    spec.keep_user_turns = {m["turn"]: (m["content"], m["source"]) for m in msgs if m["role"] == "user" and not m["error"]}
+                spec.seed_offset = 1000 * (retries + 1)
+            elif kind == "message":
+                target = next((m for m in msgs if m["turn"] == turn and m["role"] == role), None)
+                if target is None:
+                    skipped.append({"run_id": rid, "reason": f"沒有第 {turn} 回合的{'使用者發言' if role == 'user' else '角色回覆'}"})
+                    continue
+                spec.resume_messages = [m for m in msgs if m["idx"] < target["idx"]]
+                spec.start_turn = turn
+                spec.skip_user_at_start = role == "assistant"
+                if role == "user":
+                    if user_text is not None:
+                        spec.manual_user_turns = {**spec.manual_user_turns, turn: user_text}
+                    else:
+                        spec.force_llm_user_turn = turn
+                if later_users == "keep":
+                    spec.keep_user_turns = {m["turn"]: (m["content"], m["source"]) for m in msgs
+                                            if m["role"] == "user" and m["turn"] > turn and not m["error"]}
+                spec.seed_offset = 1000 * (retries + 1)
+                cut_from = target["idx"]
+                what = ("手動改寫使用者發言" if role == "user" and user_text is not None
+                        else "重試使用者發言" if role == "user" else "重試角色回覆")
+                what = f"第 {turn} 回合{what}"
+            elif kind != "resume":
+                skipped.append({"run_id": rid, "reason": f"未知的重試方式：{kind}"})
+                continue
+
             plans.append((rid, spec))
-            what = "手動改寫使用者發言" if role == "user" and user_text is not None else (
-                "重試使用者發言" if role == "user" else "重試角色回覆")
-            cuts.append((rid, target["idx"], f"第 {turn} 回合{what}"))
+            cuts.append((rid, cut_from, what))
+            logs.append({"run_id": rid, "scope": scope or ("resume" if log_kind == "error" else kind), "kind": log_kind,
+                         "turn": turn if kind == "message" else None, "role": role if kind == "message" else None,
+                         "model": run["connection"].get("model")})
+            # 連帶：下一階段起接在後面的分支
+            for d in desc:
+                if d in seen:
+                    continue
+                seen.add(d)
+                dr = store.get_run(conn, d)
+                cascade.setdefault(dr["parent_run_id"], []).append(d)
+                if later_users == "keep":
+                    child_keep[d] = {m["turn"]: (m["content"], m["source"]) for m in dr["messages"]
+                                     if m["role"] == "user" and not m["error"]}
+                cuts.append((d, 1, "上層分支重試，連帶重跑"))
+                logs.append({"run_id": d, "scope": "cascade", "kind": "cascade", "turn": None, "role": None,
+                             "model": dr["connection"].get("model")})
+
+        ts = store.now_iso()
         for rid, from_idx, reason in cuts:
             store.truncate_run(conn, rid, from_idx, reason)
             with conn:
                 conn.execute("UPDATE runs SET status = 'queued', error = NULL WHERE id = ?", (rid,))
+        with conn:
+            conn.executemany(
+                """INSERT INTO retry_log (created_at, experiment_id, run_id, scope, kind, turn, role, model, tags, note)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [(ts, exp_id, x["run_id"], x["scope"], x["kind"], x["turn"], x["role"], x["model"],
+                  json.dumps(tags or [], ensure_ascii=False) if x["kind"] == "manual" else "[]",
+                  note if x["kind"] == "manual" else "") for x in logs],
+            )
         if plans:
             _set(conn, exp_id, status="running")
-            self._spawn(exp_id, self._run_specs(exp_id, plans))
-        return {"started": [rid for rid, _ in plans], "skipped": skipped}
+            self._spawn(exp_id, self._run_specs(exp_id, plans, cascade, child_keep))
+        return {"started": [rid for rid, _ in plans], "cascade": sorted(seen), "skipped": skipped}
 
-    async def _run_specs(self, exp_id: int, plans: list[tuple[int, RunSpec]]) -> None:
+    def _child_spec(self, exp: dict, child_id: int, keep: dict[int, tuple[str, str]] | None) -> RunSpec:
+        """上層分支重跑完後：以新的對話重建子分支的情境快照與回合範圍，整段重新產生。"""
+        conn = self.conn
+        child = store.get_run(conn, child_id)
+        parent = store.get_run(conn, child["parent_run_id"])
+        sc, done = _parent_history(parent)
+        end = (child["user_settings"] or {}).get("turn_offset", 0) + child["turns"]
+        us = dict(child["user_settings"] or {})
+        us["turn_offset"] = done
+        store.update_run(conn, child_id, scenario=sc.model_dump(mode="json"), turns=max(1, end - done), user_settings=us)
+        spec = _spec_for(conn, child_id, exp)
+        retries = conn.execute("SELECT COUNT(DISTINCT archived_at) FROM run_message_archive WHERE run_id = ?",
+                               (child_id,)).fetchone()[0]
+        spec.seed_offset = 1000 * retries
+        if keep:
+            spec.keep_user_turns = {t: v for t, v in keep.items() if t > done}
+        return spec
+
+    async def _run_tree(self, exp: dict, run_id: int, spec_fn, cascade: dict[int, list[int]],
+                        child_keep: dict[int, dict]) -> None:
+        conn = self.conn
+        try:
+            await self._run_branch(exp, run_id, spec_fn)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — 單一分支失敗不影響其他分支
+            store.finish_run(conn, run_id, status="error", error=str(e), cost=0, checks={"build_warnings": [], "issues": []})
+        kids = cascade.get(run_id, [])
+        if not kids:
+            return
+        if (store.get_run(conn, run_id) or {}).get("status") != "done":
+            for d in [k for kid in kids for k in [kid, *self.descendants(kid)]]:
+                store.finish_run(conn, d, status="cancelled", error="上層分支沒有跑完，未重跑", cost=0,
+                                 checks={"build_warnings": [], "issues": []})
+            return
+        await asyncio.gather(*(
+            self._run_tree(exp, k, lambda k=k: self._child_spec(exp, k, child_keep.get(k)), cascade, child_keep)
+            for k in kids
+        ))
+
+    async def _run_specs(self, exp_id: int, plans: list[tuple[int, RunSpec]], cascade: dict[int, list[int]] | None = None,
+                         child_keep: dict[int, dict] | None = None) -> None:
         exp = get_raw(self.conn, exp_id)
         try:
-            await self._run_all(exp, [(rid, lambda spec=spec: spec) for rid, spec in plans])
+            await asyncio.gather(*(
+                self._run_tree(exp, rid, lambda spec=spec: spec, cascade or {}, child_keep or {}) for rid, spec in plans
+            ))
         except asyncio.CancelledError:
             self._on_cancel(exp_id)
             raise
@@ -742,4 +850,159 @@ def create_rerun(conn: sqlite3.Connection, manager: "Manager", origin_id: int, p
         scenario_ids=origin["scenario_ids"], connection_id=connection_id or origin["connection_id"], rerun_of=origin_id,
     )
     manager.start_stage(exp_id, 0, plan_stage(conn, get_raw(conn, exp_id), 0, None))
+    return exp_id
+
+
+# ---- 重試原因與統計 ----
+
+RETRY_REASONS_KEY = "retry_reasons"
+DEFAULT_RETRY_REASONS = ["文風不佳", "格式 / 標籤錯誤", "出戲 / 拒答", "不符角色設定", "替使用者說話", "重複 / 套話", "太短 / 截斷"]
+
+
+def load_retry_reasons(conn: sqlite3.Connection) -> list[str]:
+    return (store.get_setting(conn, RETRY_REASONS_KEY) or {}).get("reasons") or DEFAULT_RETRY_REASONS
+
+
+def retry_stats(conn: sqlite3.Connection, experiment_id: int | None = None) -> dict:
+    """手動重試率依角色模型統計（使用者不滿意）；錯誤率依實際回應的供應商統計（上游穩定度）。"""
+    where, args = ("WHERE r.experiment_id = ?", (experiment_id,)) if experiment_id is not None else ("WHERE r.experiment_id IS NOT NULL", ())
+    gen = {}
+    for row in conn.execute(
+        f"""SELECT json_extract(r.connection, '$.model') AS model, COUNT(*) AS n FROM (
+                SELECT run_id FROM run_messages WHERE role = 'assistant'
+                UNION ALL SELECT run_id FROM run_message_archive WHERE role = 'assistant'
+            ) m JOIN runs r ON r.id = m.run_id {where} GROUP BY model""",
+        args,
+    ):
+        gen[row["model"]] = row["n"]
+    lw, la = ("WHERE experiment_id = ?", (experiment_id,)) if experiment_id is not None else ("", ())
+    models: dict[str, dict] = {}
+    for row in conn.execute(f"SELECT model, kind, tags FROM retry_log {lw}", la):
+        m = models.setdefault(row["model"] or "（未知）", {"manual": 0, "error": 0, "cascade": 0, "tags": {}})
+        m[row["kind"]] = m.get(row["kind"], 0) + 1
+        for tag in json.loads(row["tags"]):
+            m["tags"][tag] = m["tags"].get(tag, 0) + 1
+    out_models = []
+    for model in sorted(set(gen) | set(models), key=str):
+        m = models.get(model, {"manual": 0, "error": 0, "cascade": 0, "tags": {}})
+        n = gen.get(model, 0)
+        out_models.append({"model": model, "replies": n, **m, "manual_rate": round(m["manual"] / n, 3) if n else None})
+    providers = []
+    for row in conn.execute(
+        f"""SELECT COALESCE(m.served_by, '（未取得）') AS provider, COUNT(*) AS n,
+                   SUM(CASE WHEN m.error IS NOT NULL THEN 1 ELSE 0 END) AS errors
+            FROM (SELECT run_id, served_by, error, cost FROM run_messages WHERE source IN ('char', 'llm_user', 'replay_fallback')
+                  UNION ALL SELECT run_id, served_by, error, cost FROM run_message_archive WHERE source IN ('char', 'llm_user', 'replay_fallback')
+            ) m JOIN runs r ON r.id = m.run_id {where} GROUP BY provider ORDER BY n DESC""",
+        args,
+    ):
+        providers.append({"provider": row["provider"], "calls": row["n"], "errors": row["errors"],
+                          "error_rate": round(row["errors"] / row["n"], 3) if row["n"] else None})
+    return {"models": out_models, "providers": providers}
+
+
+# ---- 迴歸試算（不寫入實驗） ----
+
+def diff_workspace(conn: sqlite3.Connection, exp_id: int, preset: Preset) -> dict:
+    exp = get_raw(conn, exp_id)
+    if exp is None:
+        raise KeyError(f"找不到實驗 #{exp_id}")
+    old = _preset(conn, exp["preset_hash"])
+    return {"same": vcs.tree_id_of(old) == vcs.tree_id_of(preset), "diff": vcs.diff_presets(old, preset),
+            "experiment_commit": exp["commit_id"], "preset_name": exp["preset_name"]}
+
+
+def list_probes(conn: sqlite3.Connection, run_id: int, turn: int) -> list[dict]:
+    return [dict(r) for r in conn.execute("SELECT * FROM probes WHERE run_id = ? AND turn = ? ORDER BY id DESC", (run_id, turn))]
+
+
+async def probe(conn: sqlite3.Connection, http: httpx.AsyncClient, exp_id: int, run_id: int, turn: int, preset: Preset,
+                *, lookup_stats: bool = True):
+    """用指定的預設（通常是修改後的工作區）重新產生某一回合的角色回覆：
+    歷史與這一回合的使用者發言都和原分支相同，結果只存在 probes，不寫入實驗。產生 SSE 事件。"""
+    from .build import build
+    from .runner import sse
+
+    exp = get_raw(conn, exp_id)
+    run = store.get_run(conn, run_id)
+    if exp is None or run is None or run["experiment_id"] != exp_id:
+        raise KeyError("找不到這條分支")
+    target = next((m for m in run["messages"] if m["turn"] == turn and m["role"] == "assistant"), None)
+    user = next((m for m in run["messages"] if m["turn"] == turn and m["role"] == "user"), None)
+    if user is None:
+        raise ExperimentError(f"第 {turn} 回合沒有使用者發言，無法試算")
+    connection, provider = provider_for(conn, exp["connection_id"], "角色")
+    sc = Scenario.model_validate(run["scenario"])
+    stop_idx = target["idx"] if target else user["idx"] + 1
+    history = sc.chat() + [HistoryMessage(role=m["role"], content=m["content"]) for m in run["messages"]
+                           if m["idx"] < stop_idx and not m["error"]]
+    n = conn.execute("SELECT COUNT(*) FROM probes WHERE run_id = ? AND turn = ?", (run_id, turn)).fetchone()[0]
+    built = build(preset, history, sc.names(), seed=run["seed"] + turn, card=sc.card, persona=sc.persona)
+    body = request_body(built.to_api(), preset.params, connection, run["seed"] + turn + 7000 + n, provider,
+                        temperature=run["temperature"])
+    preset_hash = store.snapshot_preset(conn, preset)
+    res = CallResult()
+    yield sse({"type": "start", "warnings": built.warnings})
+    async for ev in stream_call(http, provider, body, res, lookup_stats=lookup_stats):
+        yield sse(ev)
+    with conn:
+        pid = conn.execute(
+            """INSERT INTO probes (created_at, experiment_id, run_id, turn, preset_hash, commit_id, content, reasoning, cost,
+                                   model, served_by, finish_reason, error)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (store.now_iso(), exp_id, run_id, turn, preset_hash, vcs.commit_for_tree(conn, vcs.tree_id_of(preset)),
+             res.output, res.reasoning, res.cost, res.model, res.served_by, res.finish_reason, res.error),
+        ).lastrowid
+    yield sse({"type": "done", "probe": dict(conn.execute("SELECT * FROM probes WHERE id = ?", (pid,)).fetchone())})
+
+
+# ---- 部分迴歸：只重跑指定階段的分支 ----
+
+def create_verify(conn: sqlite3.Connection, manager: "Manager", origin_id: int, preset: Preset, *, from_stage: int,
+                  run_ids: list[int] | None = None, name: str = "") -> int:
+    """用新版本只重跑原實驗某一階段（全部或指定分支）。每條新分支沿用原分支的情境快照
+    （含上層對話）與使用者發言，因此兩邊唯一的差別是預設；之前的階段不重跑。"""
+    origin = get_raw(conn, origin_id)
+    if origin is None:
+        raise ExperimentError(f"找不到實驗 #{origin_id}")
+    stages = origin["script_snapshot"]["stages"]
+    if not 0 <= from_stage < len(stages):
+        raise ExperimentError("階段超出範圍")
+    src = [r for r in store.list_runs(conn, limit=10_000, experiment_id=origin_id) if r["stage"] == from_stage]
+    if run_ids:
+        src = [r for r in src if r["id"] in set(run_ids)]
+    if not src:
+        raise ExperimentError("沒有可以驗證的分支")
+    provider_for(conn, origin["connection_id"], "角色")
+    preset_hash = store.snapshot_preset(conn, preset)
+    state = {"scenarios": origin["state"].get("scenarios", {}), "partial_from": from_stage}
+    with conn:
+        exp_id = conn.execute(
+            """INSERT INTO experiments (created_at, name, status, current_stage, preset_name, preset_hash, commit_id,
+                                        script_id, script_name, script_snapshot, script_hash, scenario_ids,
+                                        connection_id, rerun_of, state)
+               VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (store.now_iso(), name or f"{origin['name']}（驗證：階段 {from_stage + 1}）", from_stage, preset.name, preset_hash,
+             vcs.commit_for_tree(conn, vcs.tree_id_of(preset)), origin["script_id"], origin["script_name"],
+             json.dumps(origin["script_snapshot"], ensure_ascii=False), origin["script_hash"],
+             json.dumps(origin["scenario_ids"]), origin["connection_id"], origin_id,
+             json.dumps(state, ensure_ascii=False)),
+        ).lastrowid
+    connection, _ = provider_for(conn, origin["connection_id"], "角色")
+    ids = []
+    for s in sorted(src, key=lambda r: r["id"]):
+        run = store.get_run(conn, s["id"])
+        us = dict(run["user_settings"] or {})
+        us["keep_turns"] = {str(m["turn"]): [m["content"], m["source"]] for m in run["messages"]
+                            if m["role"] == "user" and not m["error"]}
+        user_conn = Connection.model_validate(run["user_connection"]) if run["user_connection"] else None
+        rid = store.create_run(
+            conn, mode="live", replay_of=None, turns=run["turns"], seed=run["seed"], preset=preset, preset_hash=preset_hash,
+            commit_id=vcs.commit_for_tree(conn, vcs.tree_id_of(preset)), scenario=Scenario.model_validate(run["scenario"]),
+            connection=connection, user_connection=user_conn, user_settings=us, status="queued", experiment_id=exp_id,
+            stage=from_stage, parent_run_id=None, temperature=run["temperature"],
+        )
+        store.update_run(conn, rid, origin_run_id=s["id"])
+        ids.append(rid)
+    manager.start_stage(exp_id, from_stage, ids)
     return exp_id

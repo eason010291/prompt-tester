@@ -324,7 +324,7 @@ RUN_SUMMARY = """SELECT r.id, r.created_at, r.status, r.mode, r.replay_of, r.tur
                     r.commit_id, r.scenario_id, json_extract(r.scenario, '$.name') AS scenario_name, r.cost, r.checks, r.error,
                     json_extract(r.connection, '$.name') AS connection_name,
                     json_extract(r.user_connection, '$.name') AS user_connection_name,
-                    r.experiment_id, r.stage, r.parent_run_id, r.temperature, r.promoted,
+                    r.experiment_id, r.stage, r.parent_run_id, r.temperature, r.promoted, r.origin_run_id,
                     (SELECT COUNT(*) FROM run_messages m WHERE m.run_id = r.id AND m.role = 'assistant') AS replies,
                     (SELECT MAX(turn) FROM run_messages m WHERE m.run_id = r.id AND m.role = 'assistant'
                        AND m.error IS NULL) AS last_turn
@@ -385,8 +385,9 @@ def truncate_run(conn: sqlite3.Connection, run_id: int, from_idx: int, reason: s
     ts = now_iso()
     with conn:
         conn.execute(
-            """INSERT INTO run_message_archive (run_id, idx, turn, role, source, content, cost, model, archived_at, reason)
-               SELECT run_id, idx, turn, role, source, content, cost, model, ?, ? FROM run_messages
+            """INSERT INTO run_message_archive (run_id, idx, turn, role, source, content, cost, model, archived_at, reason,
+                                               error, served_by)
+               SELECT run_id, idx, turn, role, source, content, cost, model, ?, ?, error, served_by FROM run_messages
                WHERE run_id = ? AND idx >= ?""",
             (ts, reason, run_id, from_idx),
         )
@@ -396,6 +397,13 @@ def truncate_run(conn: sqlite3.Connection, run_id: int, from_idx: int, reason: s
             (run_id, from_idx),
         )
         conn.execute("DELETE FROM run_messages WHERE run_id = ? AND idx >= ?", (run_id, from_idx))
+
+
+def update_run(conn: sqlite3.Connection, run_id: int, **fields) -> None:
+    cols = ", ".join(f"{k} = ?" for k in fields)
+    vals = [json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v for v in fields.values()]
+    with conn:
+        conn.execute(f"UPDATE runs SET {cols} WHERE id = ?", (*vals, run_id))
 
 
 def run_archive(conn: sqlite3.Connection, run_id: int) -> list[dict]:

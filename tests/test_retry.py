@@ -100,7 +100,7 @@ def test_manual_user_edit_and_batch_regenerate(c):
 
     # 批次：本階段所有分支第 2 回合的使用者發言重新產生，之後也重新產生
     before = {rid: msgs(c, rid) for rid in (a, b)}
-    r = c.post(f"/api/experiments/{d['id']}/retry", json={"batch": {"stage": 0, "turn": 2, "role": "user"}, "later_users": "regenerate"}).json()
+    r = c.post(f"/api/experiments/{d['id']}/retry", json={"stage": {"stage": 0, "turn": 2, "role": "user"}, "later_users": "regenerate"}).json()
     assert sorted(r["started"]) == sorted([a, b])
     wait(c, d["id"])
     for rid in (a, b):
@@ -126,13 +126,24 @@ def test_promoted_branch_blocked_and_manual_next_stage(c):
     users = [(x["turn"], x["source"], x["content"]) for x in m if x["role"] == "user"]
     assert users[0] == (2, "manual", "我來說第二句") and users[1][1] == "llm_user"
 
-    # 已有子分支的 run 不能重試；批次時略過並說明
-    r = c.post(f"/api/experiments/{d['id']}/retry", json={"items": [{"run_id": a, "turn": 1, "role": "assistant"}]})
-    assert r.status_code == 422 and "下一階段" in r.json()["detail"]
-    r = c.post(f"/api/experiments/{d['id']}/retry", json={"batch": {"stage": 0, "turn": 1, "role": "assistant"}}).json()
-    assert len(r["started"]) == 1 and r["skipped"][0]["run_id"] == a
+    # 已有子分支的 run 重試 → 子分支連帶封存，上層跑完後以新對話重建並重跑
+    old_child = msgs(c, child["id"])
+    r = c.post(f"/api/experiments/{d['id']}/retry", json={"items": [{"run_id": a, "turn": 1, "role": "assistant"}],
+                                                         "later_users": "keep", "tags": ["文風不佳"], "note": "太花俏"}).json()
+    assert r["started"] == [a] and r["cascade"] == [child["id"]]
     d = wait(c, d["id"])
-    assert d["status"] == "done"  # 重試完恢復原本的狀態
+    assert d["status"] == "done"  # 重試完回到原本的狀態
+    new_parent = msgs(c, a)
+    new_child_run = c.get(f"/api/runs/{child['id']}").json()
+    assert new_child_run["status"] == "done"
+    # 子分支的歷史換成新的上層對話；使用者發言沿用（keep）
+    assert new_child_run["scenario"]["history"][-1]["content"] == new_parent[-1]["content"]
+    new_child = new_child_run["messages"]
+    assert [(m["turn"], m["source"], m["content"]) for m in new_child if m["role"] == "user"] ==            [(m["turn"], m["source"], m["content"]) for m in old_child if m["role"] == "user"]
+    assert [m["content"] for m in new_child if m["role"] == "assistant"] != [m["content"] for m in old_child if m["role"] == "assistant"]
+    arch = c.get(f"/api/runs/{child['id']}/archive").json()
+    assert arch and all(x["reason"] == "上層分支重試，連帶重跑" for x in arch)
+    child = new_child_run
 
     # 子分支重試第 2 回合使用者發言（手動輸入在 advance 時寫過，重試不帶文字 → 改由 LLM 產生）
     c.post(f"/api/experiments/{d['id']}/retry", json={"items": [{"run_id": child["id"], "turn": 2, "role": "user"}]})

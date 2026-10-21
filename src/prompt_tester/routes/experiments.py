@@ -6,15 +6,17 @@
 import sqlite3
 from typing import Literal
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from .. import experiments as ex
 from .. import scripts as sc
-from .. import store
+from .. import store, workspace
 from ..preset import Preset
 from ..scripts import Script, ScriptData
-from .deps import get_db
+from .deps import get_db, get_http
 
 router = APIRouter(prefix="/api")
 
@@ -166,46 +168,54 @@ async def advance(exp_id: int, body: AdvanceIn, request: Request, conn: sqlite3.
 
 class RetryTarget(BaseModel):
     run_id: int
-    # 省略 turn / role = 續跑：從中斷處接著跑
+    # message：單則（需 turn / role）；branch：整條分支；resume：從中斷處續跑
+    kind: Literal["message", "branch", "resume"] = "message"
     turn: int | None = None
     role: Literal["user", "assistant"] | None = None
 
 
-class RetryBatch(BaseModel):
-    """本階段所有分支的同一回合、同一角色。"""
+class StageRetry(BaseModel):
+    """階段層級：本階段所有分支。kind=message 時指定回合與角色；branch = 整條分支；resume = 只續跑未完成的。"""
 
     stage: int
-    turn: int
-    role: Literal["user", "assistant"]
+    kind: Literal["message", "branch", "resume"] = "message"
+    turn: int | None = None
+    role: Literal["user", "assistant"] | None = None
 
 
 class RetryIn(BaseModel):
     items: list[RetryTarget] = []
-    batch: RetryBatch | None = None
-    # 續跑這個階段所有未完成（出錯 / 中止）的分支
-    resume_stage: int | None = None
+    stage: StageRetry | None = None
     # 重試使用者發言時改用這段手動輸入（省略則由模擬使用者重新產生）
     user_text: str | None = None
     # 之後回合的使用者發言：keep 沿用、regenerate 重新產生
     later_users: Literal["keep", "regenerate"] = "regenerate"
+    # 重試原因：勾選的標籤與「其他」說明（續跑與連帶重跑由系統標記）
+    tags: list[str] = []
+    note: str = ""
 
 
 @router.post("/experiments/{exp_id}/retry")
 async def retry(exp_id: int, body: RetryIn, request: Request, conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    targets = [(t.run_id, t.turn, t.role) for t in body.items]
-    if body.resume_stage is not None:
-        targets += [(r["id"], None, None) for r in store.list_runs(conn, limit=10_000, experiment_id=exp_id)
-                    if r["stage"] == body.resume_stage and r["status"] in ("error", "cancelled")]
-    if body.batch is not None:
-        b = body.batch
-        targets += [(r["id"], b.turn, b.role) for r in store.list_runs(conn, limit=10_000, experiment_id=exp_id)
-                    if r["stage"] == b.stage]
-    if any((t[1] is None) != (t[2] is None) for t in targets):
-        raise HTTPException(422, "turn 與 role 要一起提供（都省略代表續跑）")
+    targets = [t.model_dump() for t in body.items]
+    scope = None
+    if body.stage is not None:
+        st = body.stage
+        scope = "stage"
+        for r in store.list_runs(conn, limit=10_000, experiment_id=exp_id):
+            if r["stage"] != st.stage:
+                continue
+            if st.kind == "resume" and r["status"] not in ("error", "cancelled"):
+                continue
+            targets.append({"run_id": r["id"], "kind": st.kind, "turn": st.turn, "role": st.role})
+    for t in targets:
+        if t["kind"] == "message" and (t["turn"] is None or t["role"] is None):
+            raise HTTPException(422, "單則重試需要指定 turn 與 role")
     if not targets:
         raise HTTPException(422, "沒有要重試或續跑的分支")
     try:
-        result = _manager(request).retry(exp_id, targets, user_text=body.user_text, later_users=body.later_users)
+        result = _manager(request).retry(exp_id, targets, user_text=body.user_text, later_users=body.later_users,
+                                         tags=body.tags, note=body.note, scope=scope)
     except KeyError as e:
         raise HTTPException(404, str(e).strip("'")) from e
     except ValueError as e:
@@ -213,6 +223,96 @@ async def retry(exp_id: int, body: RetryIn, request: Request, conn: sqlite3.Conn
     if not result["started"]:
         raise HTTPException(422, "沒有可以重試的分支：" + "；".join(f"#{x['run_id']} {x['reason']}" for x in result["skipped"]))
     return result
+
+
+# ---- 重試原因與統計 ----
+
+class RetryReasons(BaseModel):
+    reasons: list[str]
+
+
+@router.get("/retry-reasons")
+def get_retry_reasons(conn: sqlite3.Connection = Depends(get_db)) -> RetryReasons:
+    return RetryReasons(reasons=ex.load_retry_reasons(conn))
+
+
+@router.put("/retry-reasons")
+def put_retry_reasons(body: RetryReasons, conn: sqlite3.Connection = Depends(get_db)) -> RetryReasons:
+    reasons = [r.strip() for r in body.reasons if r.strip()]
+    store.set_setting(conn, ex.RETRY_REASONS_KEY, {"reasons": reasons})
+    return RetryReasons(reasons=reasons or ex.DEFAULT_RETRY_REASONS)
+
+
+@router.get("/retry-stats")
+async def retry_stats_all(conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    return ex.retry_stats(conn)
+
+
+@router.get("/experiments/{exp_id}/retry-stats")
+async def retry_stats(exp_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    return ex.retry_stats(conn, exp_id)
+
+
+# ---- 迴歸試算與驗證輪次 ----
+
+@router.get("/experiments/{exp_id}/diff-workspace")
+async def diff_workspace(exp_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """實驗使用的預設 → 目前工作區。"""
+    try:
+        return ex.diff_workspace(conn, exp_id, workspace.working(conn))
+    except KeyError as e:
+        raise HTTPException(404, str(e).strip("'")) from e
+
+
+class ProbeIn(BaseModel):
+    run_id: int
+    turn: int
+    # 省略時用目前工作區
+    preset: Preset | None = None
+
+
+@router.post("/experiments/{exp_id}/probe")
+async def probe(exp_id: int, body: ProbeIn, request: Request, conn: sqlite3.Connection = Depends(get_db),
+                http: httpx.AsyncClient = Depends(get_http)) -> StreamingResponse:
+    preset = body.preset or workspace.working(conn)
+    gen = ex.probe(conn, http, exp_id, body.run_id, body.turn, preset)
+    try:
+        first = await gen.__anext__()  # 先驗證參數，錯誤以 HTTP 狀態回報
+    except KeyError as e:
+        raise HTTPException(404, str(e).strip("'")) from e
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
+    async def stream():
+        yield first
+        async for chunk in gen:
+            yield chunk
+
+    return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
+
+
+@router.get("/experiments/{exp_id}/probes")
+async def probes(exp_id: int, run_id: int, turn: int, conn: sqlite3.Connection = Depends(get_db)) -> list[dict]:
+    return ex.list_probes(conn, run_id, turn)
+
+
+class VerifyIn(BaseModel):
+    from_stage: int
+    # 省略時驗證整個階段
+    run_ids: list[int] = []
+    preset: Preset | None = None
+    name: str = ""
+
+
+@router.post("/experiments/{exp_id}/verify")
+async def verify(exp_id: int, body: VerifyIn, request: Request, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """開啟驗證輪次：用新版本只重跑指定階段的分支（沿用原對話與使用者發言）。"""
+    try:
+        new_id = ex.create_verify(conn, _manager(request), exp_id, body.preset or workspace.working(conn),
+                                  from_stage=body.from_stage, run_ids=body.run_ids, name=body.name)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    return ex.detail(conn, new_id)
 
 
 @router.post("/experiments/{exp_id}/runs/{run_id}/cancel")

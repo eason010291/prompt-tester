@@ -1774,3 +1774,153 @@ label.inline input[type='number'] {
 .resume-bar .btn {
   margin-left: auto;
 }
+
+/* ---- 對話視窗、重試原因、迴歸試算 ---- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s-sm);
+  background: color-mix(in srgb, #000 45%, transparent);
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-height: calc(100vh - 40px);
+  border-radius: var(--r-lg);
+  background: var(--bg-card);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+}
+
+.modal.is-wide {
+  width: min(1200px, 100%);
+}
+
+.modal-head,
+.modal-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-xs);
+  padding: var(--s-xs) var(--s-sm);
+}
+
+.modal-head {
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.modal-head h2 {
+  margin: 0;
+  margin-right: auto;
+  font-size: 18px;
+}
+
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-xs);
+  padding: var(--s-sm);
+  overflow: auto;
+}
+
+.modal-foot {
+  justify-content: flex-end;
+  border-top: 1px solid var(--border-soft);
+}
+
+.modal-foot .alert {
+  margin-right: auto;
+}
+
+.reason-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: var(--s-xs) var(--s-sm);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-md);
+}
+
+.reason-tags legend {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.tag-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.tag-check input {
+  display: none;
+}
+
+.tag-check.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, var(--bg-card));
+  color: var(--text-strong);
+}
+
+.reason-other {
+  flex: 1 1 200px;
+  min-width: 160px;
+}
+
+.stage-retry > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.stage-retry-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px var(--s-sm);
+  margin-top: 6px;
+  padding: var(--s-xs) var(--s-sm);
+  border-radius: var(--r-md);
+  background: var(--bg-soft);
+}
+
+.stage-retry-text {
+  flex: 1 1 100%;
+  min-height: 52px;
+}
+
+.retry-stats summary {
+  cursor: pointer;
+}
+
+.retry-stats .ep-table {
+  margin-top: 6px;
+}
+
+.probe-diff > summary {
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.probe-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--s-sm);
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .probe-grid {
+    grid-template-columns: 1fr;
+  }
+}
