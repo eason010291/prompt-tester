@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api } from '../api'
 import { feedbackTemplate, parseScores } from '../lib/feedback'
+import { scoreLevel } from '../lib/runs'
 import { formatScore, type Feedback, type FeedbackTarget } from '../types'
 
 interface Props {
@@ -118,9 +119,4 @@ export function ScoreChips({ scores }: { scores: Record<string, number> }) {
       ))}
     </span>
   )
-}
-
-export function scoreLevel(v: number | null | undefined): 'hi' | 'mid' | 'lo' | 'none' {
-  if (v == null) return 'none'
-  return v >= 7.5 ? 'hi' : v >= 5 ? 'mid' : 'lo'
 }

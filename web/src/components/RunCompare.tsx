@@ -1,6 +1,7 @@
 import { lazy, Suspense, useMemo, useState, type ReactNode } from 'react'
 import DiffView from './DiffView'
-import FeedbackBox, { scoreLevel } from './FeedbackBox'
+import FeedbackBox from './FeedbackBox'
+import { scoreLevel, withDepth } from '../lib/runs'
 import { formatCost, useResource } from '../hooks/useResource'
 import { collectScriptSets } from '../lib/st/scripts'
 import { makeMacro } from '../lib/st/regex'
@@ -172,11 +173,6 @@ function alignTurns(runs: ComparedRun[]): { turn: number; cells: Cell[] }[] {
     turn,
     cells: runs.map((r) => ({ messages: withDepth(r).filter((x) => x.m.turn === turn) })),
   }))
-}
-
-export function withDepth(r: Run): { m: RunMessage; depth: number }[] {
-  const total = r.scenario.history.length + r.messages.length
-  return r.messages.map((m, idx) => ({ m, depth: total - (r.scenario.history.length + idx) - 1 }))
 }
 
 function TurnRow({

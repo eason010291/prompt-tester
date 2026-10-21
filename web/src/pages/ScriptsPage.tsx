@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { api } from '../api'
 import { useAutosave, useResource } from '../hooks/useResource'
+import { estimateScript } from '../lib/runs'
 import {
   PROMOTE_LABEL,
   USER_SOURCE_LABEL,
@@ -380,28 +381,7 @@ function TempInput({ value, onChange }: { value: number[]; onChange: (v: number[
 /** 估算每階段的分支數與呼叫次數（人工挑選假設挑 K 條） */
 function Estimate({ data }: { data: ScriptData }) {
   const [scenarios, setScenarios] = useState(1)
-  let starts = scenarios
-  let prevTurns = 0
-  let total = 0
-  const rows = data.stages.map((st, i) => {
-    const prev = data.stages[i - 1]
-    const restart = i === 0 || prev.promote.mode === 'restart'
-    if (restart) {
-      starts = scenarios
-      prevTurns = 0
-    }
-    const branches = starts * st.seeds * Math.max(1, st.temperatures.length)
-    const turns = Math.max(0, st.turns - prevTurns)
-    const calls = branches * turns * 2
-    total += calls
-    const row = { i, branches, turns, calls, note: restart && i > 0 ? '從開場' : '' }
-    // 下一階段的起點數
-    const perScenario = branches / scenarios
-    const m = st.promote.mode
-    starts = m === 'all' ? branches : m === 'restart' ? scenarios : Math.min(st.promote.k, perScenario) * scenarios
-    prevTurns = st.turns
-    return row
-  })
+  const { rows, total } = estimateScript(data, scenarios)
   return (
     <div className="card">
       <div className="list-head">
