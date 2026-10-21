@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { api } from '../api'
 import DiffView from '../components/DiffView'
+import ModifyPanel from '../components/ModifyPanel'
 import { scoreLevel } from '../components/FeedbackBox'
 import { useResource } from '../hooks/useResource'
 import { useWorkspace } from '../hooks/useWorkspace'
@@ -46,6 +47,7 @@ export default function VersionsPage() {
   const [selected, setSelected] = useState<string | null>(null)
   const [compare, setCompare] = useState<Compare | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
+  const [modify, setModify] = useState(false)
 
   const commits = useMemo(() => log.data?.commits ?? [], [log.data])
   const rows = useMemo(() => layoutGraph(commits), [commits])
@@ -145,6 +147,9 @@ export default function VersionsPage() {
             {head.data.dirty || saveState === 'dirty' ? '有未提交的變更' : '與版本一致'}
           </span>
         )}
+        <button className="btn btn-sm" onClick={() => setModify((v) => !v)} title="讓 LLM 依你的要求修改工作區並提交到新分支">
+          請 LLM 修改…
+        </button>
         {base && (
           <button
             className="btn btn-sm"
@@ -154,6 +159,7 @@ export default function VersionsPage() {
           </button>
         )}
       </header>
+      {modify && <ModifyPanel experimentId={null} onClose={() => (setModify(false), log.reload(), head.reload())} />}
       {msg && (
         <p className="alert" role="status">
           {msg}

@@ -209,6 +209,32 @@ MIGRATIONS: list[tuple[int, str]] = [
         CREATE INDEX runs_experiment ON runs(experiment_id, stage);
         """,
     ),
+    (
+        8,
+        # M6：LLM 依評語修改預設（內建 tool-calling 迴圈）的每一輪紀錄
+        """
+        CREATE TABLE agent_rounds (
+            id                  INTEGER PRIMARY KEY,
+            created_at          TEXT NOT NULL,
+            status              TEXT NOT NULL,   -- running | done | uncommitted | error | cancelled
+            author              TEXT NOT NULL,
+            connection          TEXT NOT NULL,
+            instructions        TEXT NOT NULL,
+            experiment_id       INTEGER,
+            auto_rerun          INTEGER NOT NULL DEFAULT 0,
+            base_commit         TEXT,
+            branch              TEXT,
+            result_commit       TEXT,
+            rerun_experiment_id INTEGER,
+            steps               TEXT NOT NULL DEFAULT '[]',   -- 每次 LLM 呼叫：文字、工具呼叫與結果、費用
+            final_message       TEXT,
+            tool_calls          INTEGER NOT NULL DEFAULT 0,
+            cost                REAL NOT NULL DEFAULT 0,
+            error               TEXT
+        );
+        CREATE INDEX agent_rounds_experiment ON agent_rounds(experiment_id);
+        """,
+    ),
 ]
 
 

@@ -120,32 +120,16 @@ class ExperimentIn(BaseModel):
 async def create_experiment(body: ExperimentIn, request: Request, conn: sqlite3.Connection = Depends(get_db)) -> dict:
     try:
         if body.rerun_of is not None:
-            origin = ex.get_raw(conn, body.rerun_of)
-            if origin is None:
-                raise HTTPException(404, f"找不到實驗 #{body.rerun_of}")
-            script = ScriptData.model_validate(origin["script_snapshot"])
-            script_id, script_name = origin["script_id"], origin["script_name"]
-            scenario_ids = origin["scenario_ids"]
-            connection_id = body.connection_id or origin["connection_id"]
-            name = body.name or f"{origin['name']}（重跑）"
+            exp_id = ex.create_rerun(conn, _manager(request), body.rerun_of, body.preset, name=body.name,
+                                     connection_id=body.connection_id)
         else:
             if body.script_id is None or body.connection_id is None:
                 raise HTTPException(422, "請選擇腳本與連線")
-            s = sc.get(conn, body.script_id)
-            if s is None:
-                raise HTTPException(404, f"找不到腳本 #{body.script_id}")
-            script, warnings = sc.resolve(conn, body.script_id)
-            script_id, script_name = s.id, s.name
-            scenario_ids, connection_id = body.scenario_ids, body.connection_id
-            name = body.name or f"{body.preset.name} × {s.name}"
-        exp_id = ex.create(
-            conn, name=name, preset=body.preset, script_id=script_id, script_name=script_name, script=script,
-            scenario_ids=scenario_ids, connection_id=connection_id, rerun_of=body.rerun_of,
-        )
-        run_ids = ex.plan_stage(conn, ex.get_raw(conn, exp_id), 0, None)
+            exp_id = ex.create_and_start(conn, _manager(request), name=body.name, preset=body.preset,
+                                         script_id=body.script_id, scenario_ids=body.scenario_ids,
+                                         connection_id=body.connection_id)
     except (ex.ExperimentError, ValueError) as e:
         raise HTTPException(422, str(e)) from e
-    _manager(request).start_stage(exp_id, 0, run_ids)
     return ex.detail(conn, exp_id)
 
 

@@ -6,6 +6,7 @@ import {
   newConnection,
   type Connection,
   type EndpointInfo,
+  type AgentSettings,
   type JudgeSettings,
   type ModelInfo,
   type ProviderInfo,
@@ -89,6 +90,8 @@ export default function SettingsPage() {
       </section>
 
       <UserSimCard connections={connections.data ?? []} onQuickAdd={() => add(QUICK_ADD[0].conn, false)} />
+      <ModifierCard connections={connections.data ?? []} />
+      <AgentAccessCard />
       <JudgeCard connections={connections.data ?? []} />
       <FeedbackTemplateCard />
     </div>
@@ -656,6 +659,144 @@ function JudgeForm({ initial, connections }: { initial: JudgeSettings; connectio
         挑選標準
         <textarea className="tall" value={s.criteria} onChange={(e) => set({ criteria: e.target.value })} />
       </label>
+    </section>
+  )
+}
+
+function ModifierCard({ connections }: { connections: Connection[] }) {
+  const { data, setData } = useResource<AgentSettings>('/agent/settings')
+  return data ? <ModifierForm key={data.prompt_history.length} initial={data} connections={connections} onSaved={setData} /> : null
+}
+
+function ModifierForm({ initial, connections, onSaved }: { initial: AgentSettings; connections: Connection[]; onSaved: (s: AgentSettings) => void }) {
+  const [s, setS] = useState(initial)
+  const state = useAutosave(s, async (v) => onSaved(await api<AgentSettings>('/agent/settings', { method: 'PUT', body: JSON.stringify(v) })))
+  const set = (patch: Partial<AgentSettings>) => setS((x) => ({ ...x, ...patch }))
+
+  const restoreDefault = async () => {
+    if (!window.confirm('把修改者的系統提示詞還原成預設內容？目前的版本會留在歷史中。')) return
+    set({ system_prompt: (await api<{ text: string }>('/agent/default-prompt')).text })
+  }
+
+  return (
+    <section className="card">
+      <div className="list-head">
+        <h2>修改者 LLM</h2>
+        <span className={`save-state save-${state}`}>{SAVE_LABEL[state]}</span>
+      </div>
+      <p className="muted small">
+        「依評語修改」時，由這個模型以工具呼叫讀評語、修改工作區的區塊並提交（作者記為 llm:模型名稱）。建議用推理較強的模型；呼叫次數少，品質比單價重要。
+      </p>
+      <div className="form-grid">
+        <label>
+          連線
+          <select value={s.connection_id ?? ''} onChange={(e) => set({ connection_id: Number(e.target.value) || null })}>
+            <option value="">（未設定）</option>
+            {connections.map((c) => (
+              <option key={c.id} value={c.id!}>
+                {c.name}（{c.model || '未選模型'}）
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          temperature
+          <input type="number" step={0.05} min={0} max={2} value={s.temperature} onChange={(e) => set({ temperature: Number(e.target.value) })} />
+        </label>
+        <label>
+          每次回覆上限（含推理）
+          <input type="number" step={1000} min={500} value={s.max_tokens} onChange={(e) => set({ max_tokens: Number(e.target.value) })} />
+        </label>
+        <label>
+          LLM 呼叫上限
+          <input type="number" min={1} max={100} value={s.max_steps} onChange={(e) => set({ max_steps: Number(e.target.value) })} />
+        </label>
+        <label>
+          工具呼叫上限
+          <input type="number" min={1} max={300} value={s.max_tool_calls} onChange={(e) => set({ max_tool_calls: Number(e.target.value) })} />
+        </label>
+        <label>
+          每輪花費上限（USD）
+          <input type="number" step={0.1} min={0.01} value={s.budget_usd} onChange={(e) => set({ budget_usd: Number(e.target.value) })} />
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={s.allow_params} onChange={(e) => set({ allow_params: e.target.checked })} />
+          允許修改取樣參數（temperature 等）
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={s.allow_run_experiment} onChange={(e) => set({ allow_run_experiment: e.target.checked })} />
+          允許外部 agent 執行實驗（會產生 LLM 費用）
+        </label>
+      </div>
+      <label className="stack">
+        系統提示詞（修改後舊版會保留，可還原）
+        <textarea className="tall" value={s.system_prompt} onChange={(e) => set({ system_prompt: e.target.value })} />
+      </label>
+      <div className="add-bar">
+        <button className="btn btn-sm" onClick={restoreDefault}>
+          還原預設
+        </button>
+        {s.prompt_history.length > 0 && (
+          <select
+            value=""
+            aria-label="還原舊版"
+            onChange={(e) => {
+              const h = s.prompt_history[Number(e.target.value)]
+              if (h && window.confirm('還原成這個版本？目前的版本會留在歷史中。')) set({ system_prompt: h.text })
+            }}
+          >
+            <option value="">還原舊版（{s.prompt_history.length}）…</option>
+            {s.prompt_history.map((h, i) => (
+              <option key={i} value={i}>
+                {new Date(h.saved_at).toLocaleString('zh-TW', { dateStyle: 'short', timeStyle: 'short' })} · {h.text.slice(0, 30)}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function AgentAccessCard() {
+  const base = `${window.location.protocol}//${window.location.host}`
+  const tools = useResource<{ name: string; description: string; builtin: boolean; enabled: boolean }[]>('/agent/tools')
+  return (
+    <section className="card">
+      <h2>外部 agent 接入（MCP / REST）</h2>
+      <p className="muted small">
+        用你自己的 agent（Claude Code、Claude Desktop、Cursor…）對話式修改預設，與網頁內建的修改迴圈共用同一組工具與限制：只能改工作區，提交到 main 時會自動改建 <code>agent/…</code> 分支。只接受本機連線；要開放給區網請在 config.local.toml 設定 <code>[agent] token</code>。
+      </p>
+      <dl className="access-list">
+        <dt>MCP（streamable HTTP）</dt>
+        <dd>
+          <code>{base}/mcp</code>
+          <br />
+          Claude Code：<code>claude mcp add --transport http prompt-tester {base}/mcp</code>
+        </dd>
+        <dt>MCP（stdio，轉發到執行中的伺服器）</dt>
+        <dd>
+          <code>uv run --directory &lt;專案資料夾&gt; python -m prompt_tester.mcp_stdio</code>（環境變數 <code>PROMPT_TESTER_URL={base}</code>）
+        </dd>
+        <dt>REST</dt>
+        <dd>
+          <code>POST {base}/api/agent/tools/&lt;工具名稱&gt;</code>（JSON 參數；可帶 <code>X-Agent-Name</code> 標頭作為作者名稱）· <a href="/docs#/agent%20tools" target="_blank" rel="noreferrer">OpenAPI 文件</a>
+        </dd>
+      </dl>
+      {tools.data && (
+        <details>
+          <summary className="small">工具清單（{tools.data.length}）</summary>
+          <ul className="tool-list">
+            {tools.data.map((t) => (
+              <li key={t.name} className={t.enabled ? '' : 'muted'}>
+                <code>{t.name}</code> {t.description}
+                {!t.builtin && <em>（只給外部 agent）</em>}
+                {!t.enabled && <em>（未開啟）</em>}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
     </section>
   )
 }

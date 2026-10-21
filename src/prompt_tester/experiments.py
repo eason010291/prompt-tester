@@ -525,3 +525,35 @@ def delete(conn: sqlite3.Connection, exp_id: int) -> None:
         store.delete_run(conn, rid)
     with conn:
         conn.execute("DELETE FROM experiments WHERE id = ?", (exp_id,))
+
+
+# ---- 建立並開始（網頁、外部 agent 共用） ----
+
+def create_and_start(
+    conn: sqlite3.Connection, manager: "Manager", *, name: str, preset: Preset, script_id: int,
+    scenario_ids: list[int], connection_id: int,
+) -> int:
+    from . import scripts as sc
+
+    s = sc.get(conn, script_id)
+    if s is None:
+        raise ExperimentError(f"找不到腳本 #{script_id}")
+    script, _warnings = sc.resolve(conn, script_id)
+    exp_id = create(conn, name=name or f"{preset.name} × {s.name}", preset=preset, script_id=s.id, script_name=s.name,
+                    script=script, scenario_ids=scenario_ids, connection_id=connection_id)
+    manager.start_stage(exp_id, 0, plan_stage(conn, get_raw(conn, exp_id), 0, None))
+    return exp_id
+
+
+def create_rerun(conn: sqlite3.Connection, manager: "Manager", origin_id: int, preset: Preset, *,
+                 name: str = "", connection_id: int | None = None) -> int:
+    origin = get_raw(conn, origin_id)
+    if origin is None:
+        raise ExperimentError(f"找不到實驗 #{origin_id}")
+    exp_id = create(
+        conn, name=name or f"{origin['name']}（重跑）", preset=preset, script_id=origin["script_id"],
+        script_name=origin["script_name"], script=ScriptData.model_validate(origin["script_snapshot"]),
+        scenario_ids=origin["scenario_ids"], connection_id=connection_id or origin["connection_id"], rerun_of=origin_id,
+    )
+    manager.start_stage(exp_id, 0, plan_stage(conn, get_raw(conn, exp_id), 0, None))
+    return exp_id
