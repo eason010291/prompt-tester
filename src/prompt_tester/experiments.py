@@ -238,8 +238,10 @@ def _parent_history(run: dict) -> tuple[Scenario, int]:
     return sc, done
 
 
-def plan_stage(conn: sqlite3.Connection, exp: dict, stage_idx: int, parents: list[int] | None) -> list[int]:
-    """建立這個階段的 run（狀態 queued），回傳 run id。parents 為 None 時從情境開場開始。"""
+def plan_stage(conn: sqlite3.Connection, exp: dict, stage_idx: int, parents: list[int] | None,
+               manual_turns: dict[int, str] | None = None) -> list[int]:
+    """建立這個階段的 run（狀態 queued），回傳 run id。parents 為 None 時從情境開場開始。
+    manual_turns：使用者接管輸入時預先寫好的使用者發言 {全域回合: 內容}，套用到本階段所有分支。"""
     script = ScriptData.model_validate(exp["script_snapshot"])
     stage = script.stages[stage_idx]
     preset = _preset(conn, exp["preset_hash"])
@@ -271,7 +273,10 @@ def plan_stage(conn: sqlite3.Connection, exp: dict, stage_idx: int, parents: lis
                         conn, mode="live", replay_of=None, turns=stage.turns - done, seed=seed, preset=preset,
                         preset_hash=exp["preset_hash"], commit_id=exp["commit_id"], scenario=sc,
                         connection=connection, user_connection=user_conn,
-                        user_settings=user_settings.model_dump() | {"user_source": script.user_source, "turn_offset": done},
+                        user_settings=user_settings.model_dump() | {
+                            "user_source": script.user_source, "turn_offset": done,
+                            "manual_turns": {str(t): v for t, v in (manual_turns or {}).items() if v.strip()},
+                        },
                         status="queued", experiment_id=exp["id"], stage=stage_idx, parent_run_id=parent,
                         temperature=temp,
                     )
@@ -290,6 +295,7 @@ def _spec_for(conn: sqlite3.Connection, run_id: int, exp: dict) -> RunSpec:
     connection, provider = provider_for(conn, exp["connection_id"], "角色")
     us = dict(run["user_settings"] or {})
     source, offset = us.pop("user_source", "scenario_first"), us.pop("turn_offset", 0)
+    manual = {int(t): v for t, v in (us.pop("manual_turns", None) or {}).items()}
     settings = UserSimSettings.model_validate(us)
     user_conn = user_provider = None
     if settings.connection_id is not None:
@@ -303,7 +309,7 @@ def _spec_for(conn: sqlite3.Connection, run_id: int, exp: dict) -> RunSpec:
         preset=preset, scenario=scenario, connection=connection, provider=provider, turns=run["turns"],
         seed=run["seed"], mode="live", user_connection=user_conn, user_provider=user_provider,
         user_settings=settings, scripted_user_turns=scripted_turns(root, source), turn_offset=offset,
-        temperature=run["temperature"],
+        temperature=run["temperature"], manual_user_turns=manual,
     )
 
 
@@ -361,6 +367,101 @@ class Manager:
                 _record_judge(conn, exp_id, stage_idx, {"error": str(e)})
         _set(conn, exp_id, status="done" if last else "waiting")
 
+    # ---- 重試 ----
+
+    def retry(
+        self, exp_id: int, targets: list[tuple[int, int, str]], *, user_text: str | None = None,
+        later_users: str = "regenerate",
+    ) -> dict:
+        """targets：(run_id, 回合, 角色)。刪除該訊息與之後的訊息（封存），重新產生並續跑到原本的回合數。
+
+        user_text：重試使用者發言時改用這段手動輸入；省略則由模擬使用者重新產生。
+        later_users：keep = 之後的回合沿用原本的使用者發言；regenerate = 重新產生。
+        """
+        conn = self.conn
+        exp = get_raw(conn, exp_id)
+        if exp is None:
+            raise KeyError(f"找不到實驗 #{exp_id}")
+        if self.running(exp_id) or exp["status"] == "running":
+            raise ExperimentError("實驗正在執行中，請等目前的階段或重試結束")
+        if later_users not in ("keep", "regenerate"):
+            raise ExperimentError("later_users 必須是 keep 或 regenerate")
+        if user_text is not None and not user_text.strip():
+            raise ExperimentError("手動輸入的使用者發言不能是空的")
+        plans: list[tuple[int, RunSpec]] = []
+        cuts: list[tuple[int, int, str]] = []  # (run, 從哪個 idx 起封存, 說明)
+        skipped: list[dict] = []
+        for rid, turn, role in targets:
+            run = store.get_run(conn, rid)
+            reason = None
+            if run is None or run["experiment_id"] != exp_id:
+                reason = "不屬於這個實驗"
+            elif run["status"] in ("queued", "running"):
+                reason = "還在執行中"
+            elif conn.execute("SELECT 1 FROM runs WHERE parent_run_id = ? LIMIT 1", (rid,)).fetchone():
+                reason = "已有下一階段的分支接續它，重試會讓接續的分支失去依據"
+            target = next((m for m in run["messages"] if m["turn"] == turn and m["role"] == role), None) if not reason else None
+            if not reason and target is None:
+                reason = f"沒有第 {turn} 回合的{'使用者發言' if role == 'user' else '角色回覆'}"
+            if reason:
+                skipped.append({"run_id": rid, "reason": reason})
+                continue
+            spec = _spec_for(conn, rid, exp)
+            spec.resume_messages = [m for m in run["messages"] if m["idx"] < target["idx"]]
+            spec.start_turn = turn
+            spec.skip_user_at_start = role == "assistant"
+            if role == "user":
+                if user_text is not None:
+                    spec.manual_user_turns = {**spec.manual_user_turns, turn: user_text}
+                else:
+                    spec.force_llm_user_turn = turn
+            if later_users == "keep":
+                spec.keep_user_turns = {m["turn"]: (m["content"], m["source"]) for m in run["messages"]
+                                        if m["role"] == "user" and m["turn"] > turn and not m["error"]}
+            retries = conn.execute("SELECT COUNT(DISTINCT archived_at) FROM run_message_archive WHERE run_id = ?",
+                                   (rid,)).fetchone()[0]
+            spec.seed_offset = 1000 * (retries + 1)
+            plans.append((rid, spec))
+            what = "手動改寫使用者發言" if role == "user" and user_text is not None else (
+                "重試使用者發言" if role == "user" else "重試角色回覆")
+            cuts.append((rid, target["idx"], f"第 {turn} 回合{what}"))
+        for rid, from_idx, reason in cuts:
+            store.truncate_run(conn, rid, from_idx, reason)
+            with conn:
+                conn.execute("UPDATE runs SET status = 'queued', error = NULL WHERE id = ?", (rid,))
+        if plans:
+            prev = exp["status"]
+            _set(conn, exp_id, status="running")
+            self.tasks[exp_id] = asyncio.create_task(self._run_specs(exp_id, plans, restore_status=prev))
+        return {"started": [rid for rid, _ in plans], "skipped": skipped}
+
+    async def _run_specs(self, exp_id: int, plans: list[tuple[int, RunSpec]], restore_status: str) -> None:
+        conn = self.conn
+        exp = get_raw(conn, exp_id)
+        sem = asyncio.Semaphore(ScriptData.model_validate(exp["script_snapshot"]).concurrency)
+
+        async def one(run_id: int, spec: RunSpec) -> None:
+            async with sem:
+                with conn:
+                    conn.execute("UPDATE runs SET status = 'running' WHERE id = ?", (run_id,))
+                async for _ in run_session(conn, self.http, spec, run_id, lookup_stats=self.lookup_stats):
+                    pass
+
+        try:
+            results = await asyncio.gather(*(one(r, s) for r, s in plans), return_exceptions=True)
+            for (rid, _), res in zip(plans, results):
+                if isinstance(res, Exception):
+                    store.finish_run(conn, rid, status="error", error=str(res), cost=0, checks={"build_warnings": [], "issues": []})
+        except asyncio.CancelledError:
+            with conn:
+                conn.execute(
+                    "UPDATE runs SET status = 'cancelled', error = '已中止' WHERE experiment_id = ? AND status IN ('queued', 'running')",
+                    (exp_id,),
+                )
+            _set(conn, exp_id, status=restore_status if restore_status != "running" else "cancelled")
+            raise
+        _set(conn, exp_id, status=restore_status)
+
     def cancel(self, exp_id: int) -> bool:
         t = self.tasks.get(exp_id)
         if t is None or t.done():
@@ -375,7 +476,7 @@ class Manager:
 
     # ---- 晉級 ----
 
-    def advance(self, exp_id: int, run_ids: list[int]) -> dict:
+    def advance(self, exp_id: int, run_ids: list[int], user_turns: dict[int, str] | None = None) -> dict:
         conn = self.conn
         exp = get_raw(conn, exp_id)
         if exp is None:
@@ -402,7 +503,7 @@ class Manager:
             conn.execute("UPDATE runs SET promoted = 0 WHERE experiment_id = ? AND stage = ?", (exp_id, cur))
             if parents:
                 conn.executemany("UPDATE runs SET promoted = 1 WHERE id = ?", [(r,) for r in parents])
-        new_ids = plan_stage(conn, exp, cur + 1, parents)
+        new_ids = plan_stage(conn, exp, cur + 1, parents, user_turns)
         _set(conn, exp_id, current_stage=cur + 1, status="running", error=None)
         self.start_stage(exp_id, cur + 1, new_ids)
         return {"stage": cur + 1, "runs": len(new_ids)}

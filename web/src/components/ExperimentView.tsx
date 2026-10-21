@@ -26,6 +26,24 @@ export default function ExperimentView({ id }: { id: number }) {
   const [pendingA, setPendingA] = useState<number | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
   const [modify, setModify] = useState(false)
+  // 使用者輸入：LLM 扮演，或我來輸入（使用者泡泡可編輯、晉級時可預先寫下一階段的發言）
+  const [inputMode, setInputMode] = useState<'llm' | 'manual'>(() => {
+    try {
+      return localStorage.getItem('exp.inputMode') === 'manual' ? 'manual' : 'llm'
+    } catch {
+      return 'llm'
+    }
+  })
+  const [laterUsers, setLaterUsers] = useState<'keep' | 'regenerate' | null>(null)
+  const later = laterUsers ?? (inputMode === 'manual' ? 'keep' : 'regenerate')
+  const switchMode = (m: 'llm' | 'manual') => {
+    setInputMode(m)
+    try {
+      localStorage.setItem('exp.inputMode', m)
+    } catch {
+      // 無法儲存偏好時忽略
+    }
+  }
   const d = exp.data
 
   // 執行中每 1.5 秒更新進度
@@ -126,6 +144,30 @@ export default function ExperimentView({ id }: { id: number }) {
 
       {modify && <ModifyPanel experimentId={d.id} onClose={() => setModify(false)} />}
 
+      <div className="input-mode-bar">
+        <span className="small">使用者輸入</span>
+        <div className="segmented" role="group" aria-label="使用者輸入模式">
+          <button aria-pressed={inputMode === 'llm'} onClick={() => switchMode('llm')}>
+            LLM 扮演
+          </button>
+          <button aria-pressed={inputMode === 'manual'} onClick={() => switchMode('manual')}>
+            我來輸入
+          </button>
+        </div>
+        <label className="inline small">
+          重試後，之後的使用者發言
+          <select value={later} onChange={(e) => setLaterUsers(e.target.value as 'keep' | 'regenerate')}>
+            <option value="keep">沿用原本的</option>
+            <option value="regenerate">重新產生</option>
+          </select>
+        </label>
+        <span className="muted small">
+          {inputMode === 'manual'
+            ? '打開分支後可直接改寫使用者發言並重試；晉級時可預先寫下一階段的使用者發言。'
+            : '打開分支後，每則泡泡都有「重試」與「批次」（本階段所有分支的同一回合）。'}
+        </span>
+      </div>
+
       <div className={`exp-body ${open ? 'has-panel' : ''}`}>
         <div className="stages">
           {script.stages.map((st, i) =>
@@ -148,11 +190,42 @@ export default function ExperimentView({ id }: { id: number }) {
                 onOpen={setOpen}
                 onCompare={compare}
                 act={act}
+                inputMode={inputMode}
               />
             ),
           )}
         </div>
-        {open !== null && <RunView key={open} runId={open} onFeedback={exp.reload} onClose={() => setOpen(null)} />}
+        {open !== null && (() => {
+          const r = d.runs.find((x) => x.id === open)
+          const hasChildren = d.runs.some((x) => x.parent_run_id === open)
+          return (
+            <RunView
+              key={open}
+              runId={open}
+              refreshKey={r ? `${r.status}:${r.last_turn}:${r.cost}:${r.replies}` : ''}
+              retry={
+                r
+                  ? {
+                      experimentId: d.id,
+                      stage: r.stage,
+                      stageSize: byStage(r.stage).length,
+                      inputMode,
+                      laterUsers: later,
+                      locked:
+                        d.status === 'running'
+                          ? '實驗正在執行，請等目前的階段或重試結束'
+                          : hasChildren
+                            ? '已有下一階段的分支接續它'
+                            : null,
+                      onStarted: exp.reload,
+                    }
+                  : undefined
+              }
+              onFeedback={exp.reload}
+              onClose={() => setOpen(null)}
+            />
+          )
+        })()}
       </div>
     </div>
   )
@@ -184,6 +257,7 @@ interface StageProps {
   onOpen: (id: number) => void
   onCompare: (r: ExpRun) => void
   act: (fn: () => Promise<unknown>) => Promise<void>
+  inputMode: 'llm' | 'manual'
 }
 
 function topK(runs: ExpRun[], k: number): number[] {
@@ -198,7 +272,7 @@ function topK(runs: ExpRun[], k: number): number[] {
   )
 }
 
-function StageCard({ d, st, i, runs, judge, active, open, pendingA, onOpen, onCompare, act }: StageProps) {
+function StageCard({ d, st, i, runs, judge, active, open, pendingA, onOpen, onCompare, act, inputMode }: StageProps) {
   const script = d.script_snapshot
   const mode = st.promote.mode
   const isLast = i === script.stages.length - 1
@@ -235,8 +309,17 @@ function StageCard({ d, st, i, runs, judge, active, open, pendingA, onOpen, onCo
   const scenarios = [...new Set(runs.map((r) => r.scenario_id))]
   const nextBranches = next ? (mode === 'restart' ? d.scenario_ids.length : sel.size) * next.seeds * Math.max(1, next.temperatures.length) : 0
 
+  // 我來輸入：下一階段新回合的使用者發言（空白的仍由 LLM 扮演）
+  const [nextInputs, setNextInputs] = useState<Record<number, string>>({})
+  const firstNew = mode === 'restart' ? 1 : st.turns + 1
+  const newTurns = next ? Array.from({ length: Math.max(0, next.turns - firstNew + 1) }, (_, k) => firstNew + k) : []
   const advance = () =>
-    act(() => api(`/experiments/${d.id}/advance`, { method: 'POST', body: JSON.stringify({ run_ids: [...sel] }) }))
+    act(() =>
+      api(`/experiments/${d.id}/advance`, {
+        method: 'POST',
+        body: JSON.stringify({ run_ids: [...sel], user_turns: inputMode === 'manual' ? nextInputs : {} }),
+      }),
+    )
   const runJudge = () => act(() => api(`/experiments/${d.id}/judge`, { method: 'POST', body: JSON.stringify({ stage: i }) }))
   const [judging, setJudging] = useState(false)
 
@@ -318,6 +401,17 @@ function StageCard({ d, st, i, runs, judge, active, open, pendingA, onOpen, onCo
         </div>
       ))}
 
+      {active && next && inputMode === 'manual' && newTurns.length > 0 && (
+        <div className="next-inputs">
+          <span className="small">下一階段的使用者發言（套用到所有新分支；留空的回合由 LLM 扮演）</span>
+          {newTurns.map((t) => (
+            <label key={t} className="stack">
+              第 {t} 回合
+              <textarea value={nextInputs[t] ?? ''} onChange={(e) => setNextInputs({ ...nextInputs, [t]: e.target.value })} />
+            </label>
+          ))}
+        </div>
+      )}
       {active && next && (
         <div className="advance-bar">
           {mode === 'restart' ? (

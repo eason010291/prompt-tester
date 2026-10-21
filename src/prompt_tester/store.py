@@ -380,8 +380,33 @@ def run_user_turns(conn: sqlite3.Connection, run_id: int) -> list[str]:
     return [r["content"] for r in rows]
 
 
+def truncate_run(conn: sqlite3.Connection, run_id: int, from_idx: int, reason: str) -> None:
+    """重試前：把 idx >= from_idx 的訊息封存並刪除（連同掛在這些訊息上的評語）。"""
+    ts = now_iso()
+    with conn:
+        conn.execute(
+            """INSERT INTO run_message_archive (run_id, idx, turn, role, source, content, cost, model, archived_at, reason)
+               SELECT run_id, idx, turn, role, source, content, cost, model, ?, ? FROM run_messages
+               WHERE run_id = ? AND idx >= ?""",
+            (ts, reason, run_id, from_idx),
+        )
+        conn.execute(
+            """DELETE FROM feedback WHERE target_type = 'run_message'
+               AND target_id IN (SELECT id FROM run_messages WHERE run_id = ? AND idx >= ?)""",
+            (run_id, from_idx),
+        )
+        conn.execute("DELETE FROM run_messages WHERE run_id = ? AND idx >= ?", (run_id, from_idx))
+
+
+def run_archive(conn: sqlite3.Connection, run_id: int) -> list[dict]:
+    return [dict(r) for r in conn.execute(
+        "SELECT * FROM run_message_archive WHERE run_id = ? ORDER BY archived_at DESC, idx", (run_id,)
+    ).fetchall()]
+
+
 def delete_run(conn: sqlite3.Connection, run_id: int) -> None:
     with conn:
         conn.execute("DELETE FROM feedback WHERE run_id = ?", (run_id,))
         conn.execute("DELETE FROM run_messages WHERE run_id = ?", (run_id,))
+        conn.execute("DELETE FROM run_message_archive WHERE run_id = ?", (run_id,))
         conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))

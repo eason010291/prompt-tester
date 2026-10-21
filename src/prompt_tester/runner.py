@@ -255,6 +255,19 @@ class RunSpec:
     turn_offset: int = 0
     # 溫度掃描：覆寫預設的溫度
     temperature: float | None = None
+    # 使用者手動輸入（實驗的「我來輸入」）：{全域回合數: 內容}，優先於其他來源
+    manual_user_turns: dict[int, str] = field(default_factory=dict)
+    # ---- 重試：保留前面的訊息，從 start_turn 接著跑 ----
+    resume_messages: list[dict] = field(default_factory=list)
+    start_turn: int | None = None
+    # 重試角色回覆時，start_turn 的使用者發言已在 resume_messages 裡
+    skip_user_at_start: bool = False
+    # 重試這一回合的使用者發言：一律由模擬使用者重新產生（不用腳本 / 沿用的內容）
+    force_llm_user_turn: int | None = None
+    # 之後回合沿用原本的使用者發言：{回合: (內容, 來源)}
+    keep_user_turns: dict[int, tuple[str, str]] = field(default_factory=dict)
+    # 重試時換 seed，避免支援 seed 的供應商回傳一模一樣的內容
+    seed_offset: int = 0
 
 
 def scripted_turns(scenario: Scenario, source: str) -> dict[int, str]:
@@ -273,8 +286,12 @@ async def run_session(
     sc = spec.scenario
     names = sc.names()
     history: list[HistoryMessage] = sc.chat()
-    total_cost = 0.0
-    idx = 0
+    kept = [m for m in spec.resume_messages if not m.get("error")]
+    history += [HistoryMessage(role=m["role"], content=m["content"]) for m in kept]
+    total_cost = sum(m.get("cost") or 0 for m in spec.resume_messages)
+    idx = max((m["idx"] for m in spec.resume_messages), default=0)
+    seed = spec.seed + spec.seed_offset
+    first_turn = spec.start_turn or spec.turn_offset + 1
     status, run_error = "done", None
     build_warnings: list[str] = []
     issues: list[dict] = []
@@ -298,48 +315,56 @@ async def run_session(
 
     yield sse({"type": "start", "run_id": run_id, "turns": spec.turns, "history": [h.model_dump() for h in history]})
     try:
-        for turn in range(spec.turn_offset + 1, spec.turn_offset + spec.turns + 1):
-            # 1. 使用者發言
-            yield sse({"type": "message_start", "turn": turn, "role": "user"})
-            if spec.mode == "replay" and turn <= len(spec.replay_user_turns):
-                text, source, r, req = spec.replay_user_turns[turn - 1], "replay", None, None
-            elif turn in spec.scripted_user_turns:
-                text, source, r, req = spec.scripted_user_turns[turn], "scenario", None, None
-            else:
-                if spec.user_connection is None or spec.user_provider is None:
-                    raise RuntimeError("沒有設定模擬使用者的連線（設定頁 → 模擬使用者）")
-                ucon = spec.user_connection
-                if spec.user_settings.reasoning_effort is not None:
-                    ucon = ucon.model_copy(update={"reasoning_effort": spec.user_settings.reasoning_effort})
-                req = request_body(
-                    user_sim_messages(spec.user_settings, sc, history, names),
-                    spec.preset.params,
-                    ucon,
-                    spec.seed + turn,
-                    spec.user_provider,
-                    temperature=spec.user_settings.temperature,
-                    max_tokens=spec.user_settings.max_tokens,
-                )
-                r = CallResult()
-                async for ev in stream_call(http, spec.user_provider, req, r, lookup_stats=lookup_stats):
-                    yield sse(ev)
-                text = clean_user_output(r.output, names.get("user", ""))
-                source = "replay_fallback" if spec.mode == "replay" else "llm_user"
-            msg = save(turn, "user", source, r, text, req)
-            for issue in check_message("user", text, r.finish_reason if r else None, r.error if r else None):
-                issues.append({"turn": turn, "role": "user", "message": issue})
-            yield sse({"type": "message_done", "message": msg})
-            if r and r.error:
-                status, run_error = "error", r.error
-                break
-            history.append(HistoryMessage(role="user", content=text))
+        for turn in range(first_turn, spec.turn_offset + spec.turns + 1):
+            # 1. 使用者發言（重試角色回覆時，這一回合的使用者發言已保留）
+            if not (turn == first_turn and spec.skip_user_at_start):
+                yield sse({"type": "message_start", "turn": turn, "role": "user"})
+                text, source, r, req = None, "", None, None
+                if turn == spec.force_llm_user_turn:
+                    pass
+                elif turn in spec.manual_user_turns:
+                    text, source = spec.manual_user_turns[turn], "manual"
+                elif turn in spec.keep_user_turns:
+                    text, source = spec.keep_user_turns[turn]
+                elif spec.mode == "replay" and turn <= len(spec.replay_user_turns):
+                    text, source = spec.replay_user_turns[turn - 1], "replay"
+                elif turn in spec.scripted_user_turns:
+                    text, source = spec.scripted_user_turns[turn], "scenario"
+                if text is None:
+                    if spec.user_connection is None or spec.user_provider is None:
+                        raise RuntimeError("沒有設定模擬使用者的連線（設定頁 → 模擬使用者）")
+                    ucon = spec.user_connection
+                    if spec.user_settings.reasoning_effort is not None:
+                        ucon = ucon.model_copy(update={"reasoning_effort": spec.user_settings.reasoning_effort})
+                    req = request_body(
+                        user_sim_messages(spec.user_settings, sc, history, names),
+                        spec.preset.params,
+                        ucon,
+                        seed + turn,
+                        spec.user_provider,
+                        temperature=spec.user_settings.temperature,
+                        max_tokens=spec.user_settings.max_tokens,
+                    )
+                    r = CallResult()
+                    async for ev in stream_call(http, spec.user_provider, req, r, lookup_stats=lookup_stats):
+                        yield sse(ev)
+                    text = clean_user_output(r.output, names.get("user", ""))
+                    source = "replay_fallback" if spec.mode == "replay" else "llm_user"
+                msg = save(turn, "user", source, r, text, req)
+                for issue in check_message("user", text, r.finish_reason if r else None, r.error if r else None):
+                    issues.append({"turn": turn, "role": "user", "message": issue})
+                yield sse({"type": "message_done", "message": msg})
+                if r and r.error:
+                    status, run_error = "error", r.error
+                    break
+                history.append(HistoryMessage(role="user", content=text))
 
             # 2. 角色回覆
             yield sse({"type": "message_start", "turn": turn, "role": "assistant"})
-            built = build(spec.preset, history, names, seed=spec.seed + turn, card=sc.card, persona=sc.persona)
-            if turn == spec.turn_offset + 1:
+            built = build(spec.preset, history, names, seed=seed + turn, card=sc.card, persona=sc.persona)
+            if turn == first_turn:
                 build_warnings = built.warnings
-            req = request_body(built.to_api(), spec.preset.params, spec.connection, spec.seed + turn, spec.provider,
+            req = request_body(built.to_api(), spec.preset.params, spec.connection, seed + turn, spec.provider,
                                temperature=spec.temperature)
             r = CallResult()
             async for ev in stream_call(http, spec.provider, req, r, lookup_stats=lookup_stats):

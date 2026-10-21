@@ -1,10 +1,10 @@
-import { lazy, Suspense, useMemo, useState } from 'react'
+import { lazy, Suspense, useMemo, useState, type ReactNode } from 'react'
 import DiffView from './DiffView'
 import FeedbackBox, { scoreLevel } from './FeedbackBox'
 import { formatCost, useResource } from '../hooks/useResource'
 import { collectScriptSets } from '../lib/st/scripts'
 import { makeMacro } from '../lib/st/regex'
-import { formatScore, shortId, type ComparedRun, type Preset, type Run, type RunCompare, type RunMessage } from '../types'
+import { SOURCE_LABEL, formatScore, shortId, type ComparedRun, type Preset, type Run, type RunCompare, type RunMessage } from '../types'
 
 const StMessage = lazy(() => import('./StMessage'))
 
@@ -216,12 +216,18 @@ export function MessageList({
   messages,
   feedback,
   onFeedback,
+  renderActions,
+  renderUserBody,
 }: {
   run: Run
   preset: Preset | null
   messages: { m: RunMessage; depth: number }[]
   feedback: ComparedRun['feedback'] | null
   onFeedback: () => void
+  /** 泡泡上的操作（例如重試） */
+  renderActions?: (m: RunMessage) => ReactNode
+  /** 取代使用者泡泡的內容（例如手動輸入模式的編輯框）；回傳 null 時用預設顯示 */
+  renderUserBody?: (m: RunMessage) => ReactNode | null
 }) {
   const scenario = run.scenario
   const scriptSets = useMemo(
@@ -236,8 +242,11 @@ export function MessageList({
           <div key={m.id} className="bubble bubble-user">
             <span className="bubble-role">
               {scenario.user} · 第 {m.turn} 回合
+              <em> · {SOURCE_LABEL[m.source]}</em>
             </span>
-            <div className="bubble-text">{m.content}</div>
+            {renderUserBody?.(m) ?? <div className="bubble-text">{m.content}</div>}
+            {m.error && <p className="alert alert-error">{m.error}</p>}
+            {renderActions?.(m)}
           </div>
         ) : (
           <div key={m.id} className="bubble bubble-assistant">
@@ -249,6 +258,7 @@ export function MessageList({
               <StMessage text={m.content} theme="st-dark" depth={depth} charName={scenario.char} scriptSets={scriptSets} macro={macro} />
             </Suspense>
             {m.error && <p className="alert alert-error">{m.error}</p>}
+            {renderActions?.(m)}
             {feedback && (
               <FeedbackBox
                 targetType="run_message"

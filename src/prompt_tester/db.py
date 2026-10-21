@@ -236,6 +236,26 @@ MIGRATIONS: list[tuple[int, str]] = [
         CREATE INDEX agent_rounds_experiment ON agent_rounds(experiment_id);
         """,
     ),
+    (
+        9,
+        # 重試：被取代的訊息搬到封存表（不刪除），可在分支檢視中查看舊版
+        """
+        CREATE TABLE run_message_archive (
+            id          INTEGER PRIMARY KEY,
+            run_id      INTEGER NOT NULL,
+            idx         INTEGER NOT NULL,
+            turn        INTEGER NOT NULL,
+            role        TEXT NOT NULL,
+            source      TEXT NOT NULL,
+            content     TEXT NOT NULL,
+            cost        REAL,
+            model       TEXT,
+            archived_at TEXT NOT NULL,
+            reason      TEXT NOT NULL
+        );
+        CREATE INDEX run_message_archive_run ON run_message_archive(run_id, idx);
+        """,
+    ),
 ]
 
 

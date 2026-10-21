@@ -148,6 +148,12 @@ def get_run(run_id: int, requests: bool = False, preset: bool = False, conn: sql
     return run
 
 
+@router.get("/runs/{run_id}/archive")
+def run_archive(run_id: int, conn: sqlite3.Connection = Depends(get_db)) -> list[dict]:
+    """重試時被取代的舊訊息（新的在前）。"""
+    return store.run_archive(conn, run_id)
+
+
 @router.delete("/runs/{run_id}", status_code=204)
 def delete_run(run_id: int, conn: sqlite3.Connection = Depends(get_db)) -> None:
     store.delete_run(conn, run_id)

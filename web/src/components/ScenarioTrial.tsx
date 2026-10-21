@@ -6,6 +6,7 @@ import { collectScriptSets } from '../lib/st/scripts'
 import { makeMacro } from '../lib/st/regex'
 import FeedbackBox from './FeedbackBox'
 import {
+  SOURCE_LABEL,
   formatScore,
   shortId,
   type Connection,
@@ -14,7 +15,6 @@ import {
   type Run,
   type RunEvent,
   type RunMessage,
-  type RunSource,
   type RunSummary,
   type Scenario,
   type UserSimSettings,
@@ -23,13 +23,6 @@ import {
 
 const StMessage = lazy(() => import('./StMessage'))
 
-const SOURCE_LABEL: Record<RunSource, string> = {
-  scenario: '情境',
-  llm_user: 'LLM 扮演',
-  replay: '回放',
-  replay_fallback: 'LLM 補位',
-  char: '角色',
-}
 
 interface Props {
   scenario: Scenario
