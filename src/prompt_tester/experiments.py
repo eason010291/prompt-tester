@@ -316,65 +316,145 @@ def _spec_for(conn: sqlite3.Connection, run_id: int, exp: dict) -> RunSpec:
 # ---- 執行 ----
 
 class Manager:
-    """背景執行各實驗的階段。一個實驗同時只有一個階段在跑。"""
+    """背景執行各實驗的分支。
+
+    - 一個實驗可以同時有多個工作（階段執行、重試），共用腳本的併發上限；全部結束後實驗才回到「等待晉級 / 完成」。
+    - 每條分支各自是一個 task，可以單獨中止；排隊中的分支中止後就不會開始。
+    """
 
     def __init__(self, conn: sqlite3.Connection, http: httpx.AsyncClient, lookup_stats: bool = True):
         self.conn = conn
         self.http = http
         self.lookup_stats = lookup_stats
-        self.tasks: dict[int, asyncio.Task] = {}
+        self.tasks: dict[int, set[asyncio.Task]] = {}
+        self.sems: dict[int, asyncio.Semaphore] = {}
+        self.run_tasks: dict[int, asyncio.Task] = {}
+        self.cancelled_runs: set[int] = set()
 
     def running(self, exp_id: int) -> bool:
-        t = self.tasks.get(exp_id)
-        return t is not None and not t.done()
+        return any(not t.done() for t in self.tasks.get(exp_id, ()))
+
+    def _spawn(self, exp_id: int, coro) -> None:
+        task = asyncio.create_task(coro)
+        self.tasks.setdefault(exp_id, set()).add(task)
+        task.add_done_callback(lambda t: self.tasks.get(exp_id, set()).discard(t))
+
+    def _sem(self, exp: dict) -> asyncio.Semaphore:
+        if exp["id"] not in self.sems:
+            self.sems[exp["id"]] = asyncio.Semaphore(ScriptData.model_validate(exp["script_snapshot"]).concurrency)
+        return self.sems[exp["id"]]
+
+    def _others_running(self, exp_id: int) -> bool:
+        me = asyncio.current_task()
+        return any(t is not me and not t.done() for t in self.tasks.get(exp_id, ()))
+
+    def _settle(self, exp_id: int) -> None:
+        """沒有其他工作在跑時，實驗回到等待晉級（或最後一階段的完成）。"""
+        if self._others_running(exp_id):
+            return
+        exp = get_raw(self.conn, exp_id)
+        last = exp["current_stage"] >= len(exp["script_snapshot"]["stages"]) - 1
+        _set(self.conn, exp_id, status="done" if last else "waiting")
+
+    async def _run_branch(self, exp: dict, run_id: int, spec_fn) -> None:
+        """跑一條分支。spec_fn() 在取得併發名額後才建立 spec（讀取最新設定）。"""
+        conn = self.conn
+        async with self._sem(exp):
+            if run_id in self.cancelled_runs:
+                self.cancelled_runs.discard(run_id)
+                return
+            spec = spec_fn()
+            with conn:
+                conn.execute("UPDATE runs SET status = 'running' WHERE id = ?", (run_id,))
+
+            async def consume() -> None:
+                async for _ in run_session(conn, self.http, spec, run_id, lookup_stats=self.lookup_stats):
+                    pass
+
+            task = asyncio.create_task(consume())
+            self.run_tasks[run_id] = task
+            try:
+                await task
+            except asyncio.CancelledError:
+                outer = asyncio.current_task()
+                if outer is not None and outer.cancelling():
+                    raise  # 整個實驗中止或伺服器關閉
+                # 只中止這條分支：run_session 已標記；保險起見再確認一次
+                if (store.get_run(conn, run_id) or {}).get("status") == "running":
+                    store.finish_run(conn, run_id, status="cancelled", error="已中止這條分支", cost=0,
+                                     checks={"build_warnings": [], "issues": []})
+            finally:
+                self.run_tasks.pop(run_id, None)
+                self.cancelled_runs.discard(run_id)
+
+    async def _run_all(self, exp: dict, jobs: list[tuple[int, Any]]) -> None:
+        conn = self.conn
+        results = await asyncio.gather(*(self._run_branch(exp, rid, fn) for rid, fn in jobs), return_exceptions=True)
+        for (rid, _), res in zip(jobs, results):
+            if isinstance(res, Exception):
+                store.finish_run(conn, rid, status="error", error=str(res), cost=0, checks={"build_warnings": [], "issues": []})
+
+    def _on_cancel(self, exp_id: int) -> None:
+        with self.conn:
+            self.conn.execute(
+                "UPDATE runs SET status = 'cancelled', error = '實驗已中止' WHERE experiment_id = ? AND status IN ('queued', 'running')",
+                (exp_id,),
+            )
+        if not self._others_running(exp_id):
+            _set(self.conn, exp_id, status="cancelled")
 
     def start_stage(self, exp_id: int, stage_idx: int, run_ids: list[int]) -> None:
-        self.tasks[exp_id] = asyncio.create_task(self._execute(exp_id, stage_idx, run_ids))
+        self._spawn(exp_id, self._execute(exp_id, stage_idx, run_ids))
 
     async def _execute(self, exp_id: int, stage_idx: int, run_ids: list[int]) -> None:
         conn = self.conn
         exp = get_raw(conn, exp_id)
         script = ScriptData.model_validate(exp["script_snapshot"])
-        sem = asyncio.Semaphore(script.concurrency)
-
-        async def one(run_id: int) -> None:
-            async with sem:
-                spec = _spec_for(conn, run_id, exp)
-                with conn:
-                    conn.execute("UPDATE runs SET status = 'running' WHERE id = ?", (run_id,))
-                async for _ in run_session(conn, self.http, spec, run_id, lookup_stats=self.lookup_stats):
-                    pass
-
         try:
-            results = await asyncio.gather(*(one(r) for r in run_ids), return_exceptions=True)
-            for rid, res in zip(run_ids, results):
-                if isinstance(res, Exception):
-                    store.finish_run(conn, rid, status="error", error=str(res), cost=0, checks={"build_warnings": [], "issues": []})
+            await self._run_all(exp, [(rid, lambda rid=rid: _spec_for(conn, rid, exp)) for rid in run_ids])
         except asyncio.CancelledError:
-            with conn:
-                conn.execute(
-                    "UPDATE runs SET status = 'cancelled', error = '實驗已中止' WHERE experiment_id = ? AND status IN ('queued', 'running')",
-                    (exp_id,),
-                )
-            _set(conn, exp_id, status="cancelled")
+            self._on_cancel(exp_id)
             raise
-
         last = stage_idx == len(script.stages) - 1
         if not last and script.stages[stage_idx].promote.mode == "llm_assist":
             try:
                 await self.judge(exp_id, stage_idx)
             except Exception as e:  # noqa: BLE001 — 評審失敗不影響實驗結果，記錄後由使用者手動挑選
                 _record_judge(conn, exp_id, stage_idx, {"error": str(e)})
-        _set(conn, exp_id, status="done" if last else "waiting")
+        self._settle(exp_id)
+
+    def cancel_run(self, exp_id: int, run_id: int) -> str:
+        """中止單一分支：執行中的立刻中斷，排隊中的不再開始。"""
+        run = store.get_run(self.conn, run_id)
+        if run is None or run["experiment_id"] != exp_id:
+            raise KeyError(f"找不到分支 #{run_id}")
+        task = self.run_tasks.get(run_id)
+        if task is not None and not task.done():
+            self.cancelled_runs.add(run_id)
+            task.cancel()
+            return "cancelled"
+        if run["status"] == "queued":
+            self.cancelled_runs.add(run_id)
+            store.finish_run(self.conn, run_id, status="cancelled", error="已中止這條分支", cost=run["cost"] or 0,
+                             checks=run["checks"] or {"build_warnings": [], "issues": []})
+            return "cancelled"
+        if run["status"] == "running":
+            # 沒有對應的工作（例如伺服器重啟前留下的狀態）：直接標記
+            store.finish_run(self.conn, run_id, status="cancelled", error="已中止這條分支", cost=run["cost"] or 0,
+                             checks=run["checks"] or {"build_warnings": [], "issues": []})
+            return "cancelled"
+        raise ExperimentError("這條分支沒有在執行")
 
     # ---- 重試 ----
 
     def retry(
-        self, exp_id: int, targets: list[tuple[int, int, str]], *, user_text: str | None = None,
+        self, exp_id: int, targets: list[tuple[int, int | None, str | None]], *, user_text: str | None = None,
         later_users: str = "regenerate",
     ) -> dict:
         """targets：(run_id, 回合, 角色)。刪除該訊息與之後的訊息（封存），重新產生並續跑到原本的回合數。
+        回合為 None 表示「續跑」：從中斷處（或出錯的最後一則）接著跑完。
 
+        其他分支還在執行時也可以重試已結束的分支；執行中 / 排隊中的分支本身不能重試。
         user_text：重試使用者發言時改用這段手動輸入；省略則由模擬使用者重新產生。
         later_users：keep = 之後的回合沿用原本的使用者發言；regenerate = 重新產生。
         """
@@ -382,8 +462,6 @@ class Manager:
         exp = get_raw(conn, exp_id)
         if exp is None:
             raise KeyError(f"找不到實驗 #{exp_id}")
-        if self.running(exp_id) or exp["status"] == "running":
-            raise ExperimentError("實驗正在執行中，請等目前的階段或重試結束")
         if later_users not in ("keep", "regenerate"):
             raise ExperimentError("later_users 必須是 keep 或 regenerate")
         if user_text is not None and not user_text.strip():
@@ -396,18 +474,44 @@ class Manager:
             reason = None
             if run is None or run["experiment_id"] != exp_id:
                 reason = "不屬於這個實驗"
-            elif run["status"] in ("queued", "running"):
-                reason = "還在執行中"
+            elif run["status"] in ("queued", "running") or rid in self.run_tasks:
+                reason = "還在執行中（可以先中止這條）"
             elif conn.execute("SELECT 1 FROM runs WHERE parent_run_id = ? LIMIT 1", (rid,)).fetchone():
                 reason = "已有下一階段的分支接續它，重試會讓接續的分支失去依據"
-            target = next((m for m in run["messages"] if m["turn"] == turn and m["role"] == role), None) if not reason else None
-            if not reason and target is None:
-                reason = f"沒有第 {turn} 回合的{'使用者發言' if role == 'user' else '角色回覆'}"
             if reason:
                 skipped.append({"run_id": rid, "reason": reason})
                 continue
+            msgs = run["messages"]
             spec = _spec_for(conn, rid, exp)
-            spec.resume_messages = [m for m in run["messages"] if m["idx"] < target["idx"]]
+            end_turn = spec.turn_offset + spec.turns
+            if turn is None:
+                # 續跑：從中斷處接著跑（最後一則出錯就重試它）
+                last = msgs[-1] if msgs else None
+                if last is not None and last["error"]:
+                    turn, role = last["turn"], last["role"]
+                elif last is None:
+                    spec.start_turn, cut_from, what = spec.turn_offset + 1, 1, "從頭續跑"
+                elif last["role"] == "user":
+                    spec.start_turn, spec.skip_user_at_start = last["turn"], True
+                    cut_from, what = last["idx"] + 1, f"第 {last['turn']} 回合續跑"
+                elif last["turn"] >= end_turn:
+                    skipped.append({"run_id": rid, "reason": "已經跑完，沒有可續跑的回合"})
+                    continue
+                else:
+                    spec.start_turn, cut_from, what = last["turn"] + 1, last["idx"] + 1, f"第 {last['turn'] + 1} 回合續跑"
+                if turn is None:
+                    spec.resume_messages = msgs
+                    retries = conn.execute("SELECT COUNT(DISTINCT archived_at) FROM run_message_archive WHERE run_id = ?",
+                                           (rid,)).fetchone()[0]
+                    spec.seed_offset = 1000 * retries
+                    plans.append((rid, spec))
+                    cuts.append((rid, cut_from, what))
+                    continue
+            target = next((m for m in msgs if m["turn"] == turn and m["role"] == role), None)
+            if target is None:
+                skipped.append({"run_id": rid, "reason": f"沒有第 {turn} 回合的{'使用者發言' if role == 'user' else '角色回覆'}"})
+                continue
+            spec.resume_messages = [m for m in msgs if m["idx"] < target["idx"]]
             spec.start_turn = turn
             spec.skip_user_at_start = role == "assistant"
             if role == "user":
@@ -416,7 +520,7 @@ class Manager:
                 else:
                     spec.force_llm_user_turn = turn
             if later_users == "keep":
-                spec.keep_user_turns = {m["turn"]: (m["content"], m["source"]) for m in run["messages"]
+                spec.keep_user_turns = {m["turn"]: (m["content"], m["source"]) for m in msgs
                                         if m["role"] == "user" and m["turn"] > turn and not m["error"]}
             retries = conn.execute("SELECT COUNT(DISTINCT archived_at) FROM run_message_archive WHERE run_id = ?",
                                    (rid,)).fetchone()[0]
@@ -430,49 +534,30 @@ class Manager:
             with conn:
                 conn.execute("UPDATE runs SET status = 'queued', error = NULL WHERE id = ?", (rid,))
         if plans:
-            prev = exp["status"]
             _set(conn, exp_id, status="running")
-            self.tasks[exp_id] = asyncio.create_task(self._run_specs(exp_id, plans, restore_status=prev))
+            self._spawn(exp_id, self._run_specs(exp_id, plans))
         return {"started": [rid for rid, _ in plans], "skipped": skipped}
 
-    async def _run_specs(self, exp_id: int, plans: list[tuple[int, RunSpec]], restore_status: str) -> None:
-        conn = self.conn
-        exp = get_raw(conn, exp_id)
-        sem = asyncio.Semaphore(ScriptData.model_validate(exp["script_snapshot"]).concurrency)
-
-        async def one(run_id: int, spec: RunSpec) -> None:
-            async with sem:
-                with conn:
-                    conn.execute("UPDATE runs SET status = 'running' WHERE id = ?", (run_id,))
-                async for _ in run_session(conn, self.http, spec, run_id, lookup_stats=self.lookup_stats):
-                    pass
-
+    async def _run_specs(self, exp_id: int, plans: list[tuple[int, RunSpec]]) -> None:
+        exp = get_raw(self.conn, exp_id)
         try:
-            results = await asyncio.gather(*(one(r, s) for r, s in plans), return_exceptions=True)
-            for (rid, _), res in zip(plans, results):
-                if isinstance(res, Exception):
-                    store.finish_run(conn, rid, status="error", error=str(res), cost=0, checks={"build_warnings": [], "issues": []})
+            await self._run_all(exp, [(rid, lambda spec=spec: spec) for rid, spec in plans])
         except asyncio.CancelledError:
-            with conn:
-                conn.execute(
-                    "UPDATE runs SET status = 'cancelled', error = '已中止' WHERE experiment_id = ? AND status IN ('queued', 'running')",
-                    (exp_id,),
-                )
-            _set(conn, exp_id, status=restore_status if restore_status != "running" else "cancelled")
+            self._on_cancel(exp_id)
             raise
-        _set(conn, exp_id, status=restore_status)
+        self._settle(exp_id)
 
     def cancel(self, exp_id: int) -> bool:
-        t = self.tasks.get(exp_id)
-        if t is None or t.done():
-            return False
-        t.cancel()
-        return True
+        tasks = [t for t in self.tasks.get(exp_id, ()) if not t.done()]
+        for t in tasks:
+            t.cancel()
+        return bool(tasks)
 
     async def shutdown(self) -> None:
-        for t in self.tasks.values():
+        tasks = [t for ts in self.tasks.values() for t in ts]
+        for t in tasks:
             t.cancel()
-        await asyncio.gather(*self.tasks.values(), return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     # ---- 晉級 ----
 

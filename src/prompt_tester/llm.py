@@ -19,6 +19,10 @@ import httpx
 from .providers import Provider
 
 RETRY_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
+# 串流卡住的判定：OpenRouter 在處理中會持續送 `: OPENROUTER PROCESSING` 保活註解，
+# 會讓 httpx 的讀取逾時永遠不觸發，因此另外計算「多久沒收到真正的資料」與單次呼叫的總時間。
+STALL_SECONDS = 180
+MAX_CALL_SECONDS = 900
 APP_HEADERS = {"HTTP-Referer": "http://localhost/prompt-tester", "X-OpenRouter-Title": "Prompt Tester"}
 
 
@@ -89,9 +93,16 @@ async def stream_chat(
 
                 meta_sent = False
                 gen_id = r.headers.get("x-generation-id")
+                t_start = last_data = time.monotonic()
                 async for line in r.aiter_lines():
+                    now = time.monotonic()
+                    if now - last_data > STALL_SECONDS:
+                        raise LLMError(f"超過 {STALL_SECONDS} 秒沒有收到內容（上游可能卡住），已中斷", None, retryable=not started)
+                    if now - t_start > MAX_CALL_SECONDS:
+                        raise LLMError(f"單次呼叫超過 {MAX_CALL_SECONDS // 60} 分鐘，已中斷", None, retryable=False)
                     if not line or line.startswith(":") or not line.startswith("data:"):
                         continue
+                    last_data = now
                     data = line[5:].strip()
                     if data == "[DONE]":
                         return

@@ -73,7 +73,20 @@ export default function RunView({
     )
 
   const busy = r?.status === 'queued' || r?.status === 'running'
-  const locked = retry?.locked ?? (busy ? '這條分支正在執行' : null)
+  const locked = retry?.locked ?? (busy ? '這條分支正在執行（可以先中止）' : null)
+  const incomplete = !busy && (r?.status === 'error' || r?.status === 'cancelled')
+
+  const cancelThis = async () => {
+    if (!retry) return
+    setError(null)
+    try {
+      await api(`/experiments/${retry.experimentId}/runs/${runId}/cancel`, { method: 'POST' })
+      retry.onStarted()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+  const resume = () => send({ items: [{ run_id: runId }] }, '從中斷處接著跑完這條分支？（已完成的部分保留；最後一則出錯就重試它）')
 
   const actions = (m: RunMessage) => {
     if (!retry || (m.role === 'user' && retry.inputMode === 'manual')) return null
@@ -111,6 +124,22 @@ export default function RunView({
             {r.parent_run_id && ` · 接續 #${r.parent_run_id}`}
           </p>
           {retry?.locked && <p className="muted small">重試已停用：{retry.locked}</p>}
+          {retry && busy && (
+            <div className="resume-bar">
+              <span className="small">這條分支{r.status === 'queued' ? '排隊中' : '正在生成'}。卡住的話可以單獨中止，其他分支不受影響。</span>
+              <button className="btn btn-sm danger" onClick={cancelThis}>
+                ■ 中止這條
+              </button>
+            </div>
+          )}
+          {retry && incomplete && !retry.locked && (
+            <div className="resume-bar">
+              <span className="small">這條分支沒有跑完（{r.status === 'error' ? '出錯' : '已中止'}）。</span>
+              <button className="btn btn-sm btn-primary" onClick={resume}>
+                ↻ 從中斷處續跑
+              </button>
+            </div>
+          )}
           {error && <p className="alert">{error}</p>}
           {r.scenario.history.length > 0 && (
             <details className="history-fold">
