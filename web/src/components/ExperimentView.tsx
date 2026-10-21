@@ -4,6 +4,7 @@ import { api } from '../api'
 import { formatCost, useResource } from '../hooks/useResource'
 import { scoreLevel } from './FeedbackBox'
 import ModifyPanel from './ModifyPanel'
+import RetryDialog, { type RetryRequest } from './RetryDialog'
 import RunView from './RunView'
 import {
   PROMOTE_LABEL,
@@ -13,6 +14,7 @@ import {
   type ExpRun,
   type ExperimentDetail,
   type JudgeResult,
+  type RetryStats,
   type Stage,
   type Workspace,
 } from '../types'
@@ -72,6 +74,13 @@ export default function ExperimentView({ id }: { id: number }) {
 
   const rerun = () =>
     act(async () => {
+      if (
+        !window.confirm(
+          `實驗重啟：用目前工作區從第 1 階段整張重跑，所有分支重新產生，成本最高（原實驗花費 ${formatCost(d.cost)}）。\n\n` +
+            '只想驗證某個問題的話，請改用回覆上的「🔍 迴歸試算」，再開啟只重跑一條分支或一個階段的驗證輪次。\n\n確定要整張重跑？',
+        )
+      )
+        return
       const ws = await api<Workspace>('/workspace')
       const created = await api<ExperimentDetail>('/experiments', {
         method: 'POST',
@@ -110,8 +119,8 @@ export default function ExperimentView({ id }: { id: number }) {
                 <button className="btn btn-sm btn-primary" onClick={() => setModify((v) => !v)} title="讓 LLM 讀這個實驗的評語並修改預設">
                   依評語修改…
                 </button>
-                <button className="btn btn-sm" onClick={rerun} title="用同一份腳本快照與情境，以目前工作區的預設重跑（迴歸比較）">
-                  用目前工作區重跑
+                <button className="btn btn-sm" onClick={rerun} title="實驗重啟：用目前工作區從第 1 階段整張重跑（成本最高）">
+                  用目前工作區重跑（實驗重啟）
                 </button>
                 <button className="btn btn-sm danger" onClick={remove}>
                   刪除
@@ -131,6 +140,7 @@ export default function ExperimentView({ id }: { id: number }) {
             </>
           )}
         </p>
+        <RetryStatsLine expId={d.id} refreshKey={`${d.status}:${d.runs.length}:${d.cost}`} />
         {msg && <p className="alert alert-error">{msg}</p>}
         {pendingA !== null && (
           <p className="alert" role="status">
@@ -164,14 +174,21 @@ export default function ExperimentView({ id }: { id: number }) {
         <span className="muted small">
           {inputMode === 'manual'
             ? '打開分支後可直接改寫使用者發言並重試；晉級時可預先寫下一階段的使用者發言。'
-            : '打開分支後，每則泡泡都有「重試」與「批次」（本階段所有分支的同一回合）。'}
+            : '打開分支後可單則重試或「🔍 迴歸試算」；整條分支在分支面板、整個階段在階段卡片的「重試本階段」。'}
         </span>
       </div>
 
       <div className={`exp-body ${open ? 'has-panel' : ''}`}>
         <div className="stages">
           {script.stages.map((st, i) =>
-            i > d.current_stage ? (
+            i < (d.state.partial_from ?? 0) ? (
+              <div key={i} className="card stage-card is-future">
+                <StageTitle st={st} i={i} />
+                <p className="muted small">
+                  沿用原實驗 <Link to={`/experiments?exp=${d.rerun_of}`}>#{d.rerun_of}</Link> 的對話（驗證輪次不重跑這個階段）
+                </p>
+              </div>
+            ) : i > d.current_stage ? (
               <div key={i} className="card stage-card is-future">
                 <StageTitle st={st} i={i} />
                 <p className="muted small">尚未開始</p>
@@ -191,13 +208,13 @@ export default function ExperimentView({ id }: { id: number }) {
                 onCompare={compare}
                 act={act}
                 inputMode={inputMode}
+                laterUsers={later}
               />
             ),
           )}
         </div>
         {open !== null && (() => {
           const r = d.runs.find((x) => x.id === open)
-          const hasChildren = d.runs.some((x) => x.parent_run_id === open)
           return (
             <RunView
               key={open}
@@ -206,12 +223,11 @@ export default function ExperimentView({ id }: { id: number }) {
               retry={
                 r
                   ? {
-                      experimentId: d.id,
-                      stage: r.stage,
+                      exp: d,
                       stageSize: byStage(r.stage).length,
+                      cascade: descendants(d.runs, [open]).length,
                       inputMode,
                       laterUsers: later,
-                      locked: hasChildren ? '已有下一階段的分支接續它' : null,
                       onStarted: exp.reload,
                     }
                   : undefined
@@ -253,6 +269,83 @@ interface StageProps {
   onCompare: (r: ExpRun) => void
   act: (fn: () => Promise<unknown>) => Promise<void>
   inputMode: 'llm' | 'manual'
+  laterUsers: 'keep' | 'regenerate'
+}
+
+/** 接在這些分支後面的所有下游分支 */
+function descendants(runs: ExpRun[], roots: number[]): number[] {
+  const out: number[] = []
+  let frontier = roots
+  while (frontier.length) {
+    const kids = runs.filter((r) => r.parent_run_id != null && frontier.includes(r.parent_run_id)).map((r) => r.id)
+    out.push(...kids)
+    frontier = kids
+  }
+  return out
+}
+
+function RetryStatsLine({ expId, refreshKey }: { expId: number; refreshKey: string }) {
+  const stats = useResource<RetryStats>(`/experiments/${expId}/retry-stats?v=${encodeURIComponent(refreshKey)}`)
+  const s = stats.data
+  if (!s) return null
+  const manual = s.models.filter((m) => m.manual > 0)
+  const errors = s.providers.filter((p) => p.errors > 0)
+  if (!manual.length && !errors.length) return null
+  const pct = (v: number | null) => (v == null ? '—' : `${(v * 100).toFixed(1)}%`)
+  return (
+    <details className="retry-stats">
+      <summary className="small">
+        重試統計：
+        {manual.map((m) => `${m.model} 手動重試 ${m.manual}/${m.replies}（${pct(m.manual_rate)}）`).join('、') || '沒有手動重試'}
+        {errors.length > 0 && ` · 供應商錯誤：${errors.map((p) => `${p.provider} ${p.errors}/${p.calls}`).join('、')}`}
+      </summary>
+      <table className="ep-table">
+        <thead>
+          <tr>
+            <th>角色模型</th>
+            <th>產生的回覆</th>
+            <th>手動重試</th>
+            <th>重試率</th>
+            <th>出錯續跑</th>
+            <th>原因</th>
+          </tr>
+        </thead>
+        <tbody>
+          {s.models.map((m) => (
+            <tr key={m.model}>
+              <td>{m.model}</td>
+              <td>{m.replies}</td>
+              <td>{m.manual}</td>
+              <td className={(m.manual_rate ?? 0) >= 0.2 ? 'delta-down' : ''}>{pct(m.manual_rate)}</td>
+              <td>{m.error}</td>
+              <td className="small">{Object.entries(m.tags).map(([t, n]) => `${t} ×${n}`).join('、') || '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <table className="ep-table">
+        <thead>
+          <tr>
+            <th>實際回應的供應商</th>
+            <th>呼叫</th>
+            <th>錯誤</th>
+            <th>錯誤率</th>
+          </tr>
+        </thead>
+        <tbody>
+          {s.providers.map((p) => (
+            <tr key={p.provider}>
+              <td>{p.provider}</td>
+              <td>{p.calls}</td>
+              <td>{p.errors}</td>
+              <td className={(p.error_rate ?? 0) >= 0.1 ? 'delta-down' : ''}>{pct(p.error_rate)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="muted small">手動重試率依角色模型計算（你不滿意而重試）；錯誤率依實際回應的供應商計算，偏高時可在連線設定排除該供應商。</p>
+    </details>
+  )
 }
 
 function topK(runs: ExpRun[], k: number): number[] {
@@ -267,7 +360,7 @@ function topK(runs: ExpRun[], k: number): number[] {
   )
 }
 
-function StageCard({ d, st, i, runs, judge, active, open, pendingA, onOpen, onCompare, act, inputMode }: StageProps) {
+function StageCard({ d, st, i, runs, judge, active, open, pendingA, onOpen, onCompare, act, inputMode, laterUsers }: StageProps) {
   const script = d.script_snapshot
   const mode = st.promote.mode
   const isLast = i === script.stages.length - 1
@@ -346,13 +439,16 @@ function StageCard({ d, st, i, runs, judge, active, open, pendingA, onOpen, onCo
           </span>
           <button
             className="btn btn-sm"
-            onClick={() => act(() => api(`/experiments/${d.id}/retry`, { method: 'POST', body: JSON.stringify({ resume_stage: i }) }))}
+            onClick={() =>
+              act(() => api(`/experiments/${d.id}/retry`, { method: 'POST', body: JSON.stringify({ stage: { stage: i, kind: 'resume' } }) }))
+            }
             title="從中斷處接著跑（最後一則出錯就重試它），已完成的部分保留"
           >
             ↻ 續跑未完成的分支
           </button>
         </div>
       )}
+      <StageRetry d={d} st={st} i={i} runs={runs} inputMode={inputMode} laterUsers={laterUsers} onStarted={() => act(async () => {})} />
       {judge && (judge.error || judge.model) && (
         <p className={`small ${judge.error ? 'alert alert-error' : 'muted'}`}>
           {judge.error ? `評審失敗：${judge.error}` : `評審 ${judge.model} 已預選 ${judgePicks.length} 條 · ${formatCost(judge.cost)}`}
@@ -483,5 +579,119 @@ function StageCard({ d, st, i, runs, judge, active, open, pendingA, onOpen, onCo
         </div>
       )}
     </div>
+  )
+}
+
+/** 階段層級的重試：本階段所有分支「整條重新產生」或「指定回合 / 角色」；我來輸入模式可直接給該回合的使用者發言。 */
+function StageRetry({
+  d,
+  st,
+  i,
+  runs,
+  inputMode,
+  laterUsers,
+  onStarted,
+}: {
+  d: ExperimentDetail
+  st: Stage
+  i: number
+  runs: ExpRun[]
+  inputMode: 'llm' | 'manual'
+  laterUsers: 'keep' | 'regenerate'
+  onStarted: () => void
+}) {
+  const stages = d.script_snapshot.stages
+  const prev = i === 0 || stages[i - 1].promote.mode === 'restart' ? 0 : stages[i - 1].turns
+  const turns = Array.from({ length: Math.max(0, st.turns - prev) }, (_, k) => prev + k + 1)
+  const [mode, setMode] = useState<'branch' | 'message'>('message')
+  const [turn, setTurn] = useState(turns[turns.length - 1] ?? 1)
+  const [role, setRole] = useState<'assistant' | 'user'>('assistant')
+  const [text, setText] = useState('')
+  const [req, setReq] = useState<RetryRequest | null>(null)
+  const [result, setResult] = useState<string | null>(null)
+  const settled = runs.filter((r) => r.status !== 'running' && r.status !== 'queued')
+  const cascade = descendants(d.runs, settled.map((r) => r.id)).length
+  const manualText = mode === 'message' && role === 'user' && inputMode === 'manual'
+
+  const open = () =>
+    setReq({
+      title: `重試階段 ${i + 1}（${settled.length} 條分支）`,
+      description: (
+        <p className="small">
+          {mode === 'branch'
+            ? '本階段每條分支的所有回合重新產生（上層的對話保留）。'
+            : `本階段每條分支的第 ${turn} 回合${role === 'user' ? '使用者發言' : '角色回覆'}${manualText && text.trim() ? '改成你輸入的內容並' : ''}重新產生，之後的訊息封存、續跑到原本的回合數。`}
+          執行中的分支會略過。
+        </p>
+      ),
+      body: {
+        stage: { stage: i, kind: mode, ...(mode === 'message' ? { turn, role } : {}) },
+        ...(manualText && text.trim() ? { user_text: text } : {}),
+      },
+      cascade,
+      askLater: true,
+    })
+
+  if (!runs.length) return null
+  return (
+    <details className="stage-retry">
+      <summary className="small">↻ 重試本階段…</summary>
+      <div className="stage-retry-body">
+        <div className="segmented" role="group" aria-label="重試範圍">
+          <button aria-pressed={mode === 'message'} onClick={() => setMode('message')}>
+            指定回合
+          </button>
+          <button aria-pressed={mode === 'branch'} onClick={() => setMode('branch')}>
+            整條分支
+          </button>
+        </div>
+        {mode === 'message' && (
+          <>
+            <label className="inline small">
+              回合
+              <select value={turn} onChange={(e) => setTurn(Number(e.target.value))}>
+                {turns.map((t) => (
+                  <option key={t} value={t}>
+                    第 {t} 回合
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="inline small">
+              角色
+              <select value={role} onChange={(e) => setRole(e.target.value as 'assistant' | 'user')}>
+                <option value="assistant">角色回覆</option>
+                <option value="user">使用者發言</option>
+              </select>
+            </label>
+          </>
+        )}
+        {manualText && (
+          <textarea
+            className="stage-retry-text"
+            value={text}
+            placeholder="這一回合所有分支的使用者發言（留空則由 LLM 重新扮演）"
+            onChange={(e) => setText(e.target.value)}
+          />
+        )}
+        <button className="btn btn-sm btn-primary" disabled={!settled.length} onClick={open}>
+          重試 {settled.length} 條…
+        </button>
+        {result && <span className="muted small">{result}</span>}
+      </div>
+      {req && (
+        <RetryDialog
+          experimentId={d.id}
+          req={req}
+          defaultLater={laterUsers}
+          onDone={(r) => {
+            setReq(null)
+            setResult(`已開始 ${r.started.length} 條${r.cascade.length ? `，連帶 ${r.cascade.length} 條` : ''}${r.skipped.length ? `，略過 ${r.skipped.length} 條` : ''}`)
+            onStarted()
+          }}
+          onClose={() => setReq(null)}
+        />
+      )}
+    </details>
   )
 }

@@ -530,6 +530,8 @@ export interface RunSummary {
   promoted: number
   /** 最後完成的全域回合 */
   last_turn: number | null
+  /** 部分迴歸：對照的原分支 */
+  origin_run_id?: number | null
 }
 
 export interface Run
@@ -671,7 +673,7 @@ export interface ExperimentDetail {
   scenario_ids: number[]
   connection_id: number
   rerun_of: number | null
-  state: { judge?: Record<string, JudgeResult>; judge_cost?: number }
+  state: { judge?: Record<string, JudgeResult>; judge_cost?: number; partial_from?: number }
   error: string | null
   runs: ExpRun[]
   cost: number
@@ -744,4 +746,50 @@ export interface AgentRound {
   tool_calls: number
   cost: number
   error: string | null
+}
+
+// ---- 分層重試與迴歸試算 ----
+
+export type RetryKind = 'message' | 'branch' | 'resume'
+
+export interface RetryResult {
+  started: number[]
+  cascade: number[]
+  skipped: { run_id: number; reason: string }[]
+}
+
+export interface RetryStats {
+  models: {
+    model: string
+    replies: number
+    manual: number
+    error: number
+    cascade: number
+    manual_rate: number | null
+    tags: Record<string, number>
+  }[]
+  providers: { provider: string; calls: number; errors: number; error_rate: number | null }[]
+}
+
+export interface Probe {
+  id: number
+  created_at: string
+  run_id: number
+  turn: number
+  preset_hash: string
+  commit_id: string | null
+  content: string
+  reasoning: string
+  cost: number | null
+  model: string | null
+  served_by: string | null
+  finish_reason: string | null
+  error: string | null
+}
+
+export interface WorkspaceDiff {
+  same: boolean
+  diff: PresetDiff
+  experiment_commit: string | null
+  preset_name: string
 }
