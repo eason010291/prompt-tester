@@ -153,7 +153,7 @@ export default function ExperimentView({ id }: { id: number }) {
         )}
       </div>
 
-      {modify && <ModifyPanel experimentId={d.id} onClose={() => setModify(false)} />}
+      {modify && <ModifyPanel experimentId={d.id} scenarioIds={d.scenario_ids} onClose={() => setModify(false)} />}
 
       <div className="input-mode-bar">
         <span className="small">使用者輸入</span>

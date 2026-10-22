@@ -436,6 +436,7 @@ export const shortId = (id: string | null | undefined) => (id ? id.slice(0, 8) :
 
 export function authorLabel(author: string): string {
   if (author === 'human') return '人工'
+  if (author === 'system') return '系統（自動）'
   if (author.startsWith('llm:')) return `LLM · ${author.slice(4)}`
   if (author.startsWith('agent:')) return `外部 · ${author.slice(6)}`
   return author
@@ -714,6 +715,7 @@ export interface AgentSettings {
   budget_usd: number
   allow_params: boolean
   allow_run_experiment: boolean
+  allow_opening: boolean
 }
 
 export interface AgentCall {
@@ -746,6 +748,10 @@ export interface AgentRound {
   branch: string | null
   result_commit: string | null
   rerun_experiment_id: number | null
+  target: 'preset' | 'card'
+  scenario_id: number | null
+  base_revision: number | null
+  result_revision: number | null
   steps?: AgentStep[]
   step_count?: number
   final_message: string | null
@@ -796,6 +802,8 @@ export interface Probe {
 
 export interface WorkspaceDiff {
   same: boolean
+  same_preset: boolean
+  card: ScenarioDiff | null
   diff: PresetDiff
   experiment_commit: string | null
   preset_name: string
@@ -816,4 +824,31 @@ export interface RunMetrics {
   totals: Record<string, number>
   per_reply: Record<string, number | null>
   replies: number
+}
+
+// ---- 情境（角色卡）版本 ----
+
+export interface ScenarioRevision {
+  id: number
+  scenario_id: number
+  created_at: string
+  author: string
+  message: string
+  hash: string
+  parent_id: number | null
+  meta: Record<string, unknown>
+  number: number
+}
+
+export interface ScenarioRevisionState {
+  revisions: ScenarioRevision[]
+  dirty: boolean
+  latest: number | null
+}
+
+export interface ScenarioDiff {
+  fields: { path: string; label: string; group: 'card' | 'fixture' | 'meta'; old: string; new: string }[]
+  lore: { uid: number; comment: string; status: 'added' | 'removed' | 'modified'; changes: string[]; old: string; new: string }[]
+  card_changed: boolean
+  fixture_changed: boolean
 }

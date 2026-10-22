@@ -5,6 +5,7 @@
 
 import inspect
 import sqlite3
+from typing import Literal
 
 from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel
@@ -49,13 +50,17 @@ class RoundIn(BaseModel):
     auto_rerun: bool = False
     # 省略時用設定頁的修改者連線
     connection_id: int | None = None
+    # 修改對象：preset（預設）或 card（情境的角色卡，需 scenario_id）；一輪只改一個對象
+    target: Literal["preset", "card"] = "preset"
+    scenario_id: int | None = None
 
 
 @router.post("/rounds")
 async def start_round(body: RoundIn, request: Request, conn: sqlite3.Connection = Depends(get_db)) -> dict:
     try:
         rid = _modifier(request).start(instructions=body.instructions, experiment_id=body.experiment_id,
-                                       auto_rerun=body.auto_rerun, connection_id=body.connection_id)
+                                       auto_rerun=body.auto_rerun, connection_id=body.connection_id,
+                                       target=body.target, scenario_id=body.scenario_id)
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
     return modifier.get_round(conn, rid)

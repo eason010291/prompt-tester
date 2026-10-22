@@ -6,6 +6,7 @@ import { collectScriptSets } from '../lib/st/scripts'
 import { makeMacro } from '../lib/st/regex'
 import { shortId, type ExperimentDetail, type Preset, type Probe, type Run, type RunMessage, type WorkspaceDiff } from '../types'
 import DiffView from './DiffView'
+import ScenarioDiffView from './ScenarioDiffView'
 import MetricChips from './MetricChips'
 import Modal from './Modal'
 
@@ -35,7 +36,7 @@ export default function ProbeDialog({
   onClose: () => void
 }) {
   const navigate = useNavigate()
-  const diff = useResource<WorkspaceDiff>(`/experiments/${exp.id}/diff-workspace`)
+  const diff = useResource<WorkspaceDiff>(`/experiments/${exp.id}/diff-workspace?scenario_id=${run.scenario_id}`)
   const ws = useResource<{ preset: Preset }>('/workspace')
   const probes = useResource<Probe[]>(`/experiments/${exp.id}/probes?run_id=${run.id}&turn=${message.turn}`)
   const [streaming, setStreaming] = useState<string | null>(null)
@@ -124,11 +125,23 @@ export default function ProbeDialog({
     >
       <details className="probe-diff" open={!diff.data?.same}>
         <summary>
-          提示詞變更：實驗版本 {exp.commit_id ? <code>{shortId(exp.commit_id)}</code> : '（未提交）'} → 目前工作區
-          {diff.data && (diff.data.same ? '（沒有差異）' : `（${Object.entries(diff.data.diff.summary).filter(([, v]) => v).map(([k, v]) => `${k} ${v}`).join('、')}）`)}
+          變更：實驗版本 {exp.commit_id ? <code>{shortId(exp.commit_id)}</code> : '（未提交）'} → 目前的預設與角色卡
+          {diff.data &&
+            (diff.data.same
+              ? '（沒有差異）'
+              : `（${[
+                  ...(diff.data.same_preset ? [] : [`預設：${Object.entries(diff.data.diff.summary).filter(([, v]) => v).map(([k, v]) => `${k} ${v}`).join('、')}`]),
+                  ...(diff.data.card?.card_changed ? [`角色卡：${diff.data.card.fields.length + diff.data.card.lore.length} 處`] : []),
+                ].join('；')}）`)}
         </summary>
-        {diff.data?.same && <p className="alert">工作區和實驗用的版本相同。先到提示詞頁修改（或用「依評語修改」），再回來試算。</p>}
-        {diff.data && !diff.data.same && <DiffView diff={diff.data.diff} labels={['實驗版本', '工作區']} />}
+        {diff.data?.same && <p className="alert">預設和角色卡都和實驗用的版本相同。先修改預設或角色卡（或用「依評語修改」），再回來試算。</p>}
+        {diff.data && !diff.data.same_preset && <DiffView diff={diff.data.diff} labels={['實驗版本', '工作區']} />}
+        {diff.data?.card?.card_changed && (
+          <>
+            <h3 className="small">角色卡</h3>
+            <ScenarioDiffView diff={diff.data.card} labels={['實驗用的角色卡', '目前的角色卡']} />
+          </>
+        )}
       </details>
 
       {userMsg && (
