@@ -1993,3 +1993,13 @@ label.inline input[type='number'] {
   cursor: pointer;
   font-size: 13px;
 }
+
+.card-export {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.btn.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}

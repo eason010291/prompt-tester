@@ -184,6 +184,7 @@ function ScenarioEditor({ initial, onSaved, onDuplicate, onDelete, suggestPrefli
           <input className="title-input" value={draft.name} aria-label="情境名稱" onChange={(e) => set({ name: e.target.value })} />
           <span className={`save-state save-${state}`}>{SAVE_LABEL[state]}</span>
           <div className="header-actions">
+            {draft.card && draft.id != null && <CardExport scenarioId={draft.id} pending={state !== 'saved'} />}
             <button className="btn btn-sm" onClick={() => onDuplicate(draft)}>
               複製
             </button>
@@ -273,5 +274,33 @@ function ScenarioEditor({ initial, onSaved, onDuplicate, onDelete, suggestPrefli
 
         <ScenarioTrial scenario={draft} saved={state === 'saved'} suggestPreflight={suggestPreflight} />
       </section>
+  )
+}
+
+/** 匯出角色卡（SillyTavern 1.18.0 格式）：V3 JSON，或 PNG（沿用匯入時的原圖，寫入 chara + ccv3）。 */
+function CardExport({ scenarioId, pending }: { scenarioId: number; pending: boolean }) {
+  const image = useResource<{ has_image: boolean; filename: string | null }>(`/scenarios/${scenarioId}/card-image`)
+  const disabled = pending ? '請等自動儲存完成再匯出' : undefined
+  const base = `/api/scenarios/${scenarioId}/export`
+  return (
+    <span className="card-export" title={disabled}>
+      <a className={`btn btn-sm ${pending ? 'is-disabled' : ''}`} href={pending ? undefined : `${base}?format=json&spec=v3`} download aria-disabled={pending}>
+        匯出 V3 JSON
+      </a>
+      <a
+        className={`btn btn-sm ${pending ? 'is-disabled' : ''}`}
+        href={pending ? undefined : `${base}?format=png`}
+        download
+        aria-disabled={pending}
+        title={
+          disabled ??
+          (image.data?.has_image
+            ? `沿用匯入時的圖片（${image.data.filename}），寫入 V2（chara）與 V3（ccv3）資料`
+            : '這張卡是從 JSON 匯入的，沒有原圖：會用純色預設圖，匯入 ST 後可再換頭像')
+        }
+      >
+        匯出 PNG{image.data && !image.data.has_image ? '（預設圖）' : ''}
+      </a>
+    </span>
   )
 }

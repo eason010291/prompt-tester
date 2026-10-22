@@ -104,3 +104,189 @@ def parse_card(raw: dict) -> tuple[CharacterCard, list[str]]:
     if card.regex_scripts:
         notes.append(f"{len(card.regex_scripts)} 個角色正則已保留（M8 才會用於渲染）。")
     return card, notes
+
+
+# ---- 匯出（對照 ST 1.18.0 src/endpoints/characters.js charaFormatData / convertWorldInfoToCharacterBook、
+#      src/character-card-parser.js write）----
+
+
+def _lore_entry_out(e, raw_entry: dict | None, index: int) -> dict:
+    """LoreEntry → ST character_book 條目；原始條目中本工具不認得的欄位原樣保留。"""
+    from .worldinfo import MATCH_SOURCES, POS_BEFORE
+
+    base = json.loads(json.dumps(raw_entry)) if raw_entry else {}
+    ext = dict(base.get("extensions") or {})
+    sources = set(e.match_sources)
+    dur = e.delay_until_recursion
+    ext.update({
+        "position": e.position,
+        "exclude_recursion": e.exclude_recursion,
+        "display_index": ext.get("display_index", index),
+        "probability": e.probability,
+        "useProbability": e.use_probability,
+        "depth": e.depth,
+        "selectiveLogic": e.selective_logic,
+        "outlet_name": e.outlet_name,
+        "group": e.group,
+        "group_override": e.group_override,
+        "group_weight": e.group_weight,
+        "prevent_recursion": e.prevent_recursion,
+        # ST：true 或遞迴層級數字；0 = 關閉
+        "delay_until_recursion": (dur if dur > 1 else bool(dur)),
+        "scan_depth": e.scan_depth,
+        "match_whole_words": e.match_whole_words,
+        "use_group_scoring": e.use_group_scoring,  # None = 沿用全域設定（ST 匯入時 ?? null）
+        "case_sensitive": e.case_sensitive,
+        "automation_id": ext.get("automation_id", ""),
+        "role": e.role,
+        "vectorized": ext.get("vectorized", False),
+        "sticky": ext.get("sticky"),
+        "cooldown": ext.get("cooldown"),
+        "delay": e.delay,
+        "triggers": e.triggers,
+        "ignore_budget": e.ignore_budget,
+        **{flag: src in sources for flag, src in MATCH_SOURCES.items()},
+    })
+    base.update({
+        "id": e.uid,
+        "keys": e.keys,
+        "secondary_keys": e.secondary_keys,
+        "comment": e.comment,
+        "content": e.content,
+        "constant": e.constant,
+        "selective": e.selective,
+        "insertion_order": e.order,
+        "enabled": e.enabled,
+        "position": "before_char" if e.position == POS_BEFORE else "after_char",
+        "use_regex": base.get("use_regex", True),
+        "extensions": ext,
+    })
+    return base
+
+
+def _book_out(book, raw_book: dict | None) -> dict:
+    raw_book = raw_book or {}
+    raw_entries = raw_book.get("entries") or []
+    by_id = {}
+    for i, re_ in enumerate(raw_entries):
+        if isinstance(re_, dict):
+            by_id[re_["id"] if isinstance(re_.get("id"), int) else i] = re_
+    out = json.loads(json.dumps({k: v for k, v in raw_book.items() if k != "entries"}))
+    out.update({"name": book.name or raw_book.get("name") or "", "entries": [
+        _lore_entry_out(e, by_id.get(e.uid), i) for i, e in enumerate(book.entries)
+    ]})
+    for key in ("scan_depth", "token_budget", "recursive_scanning"):
+        value = getattr(book, key)
+        if value is not None:
+            out[key] = value
+    return out
+
+
+def export_card(scenario, spec: str = "chara_card_v3") -> dict:
+    """情境的角色卡 → ST 格式的角色卡物件（V2 或 V3）。
+
+    結構與 ST 匯出相同：頂層保留 V1 欄位（name、description…、creatorcomment、talkativeness、fav、tags），
+    完整資料在 data（含 extensions.depth_prompt、regex_scripts、world 與 character_book）。
+    原始卡片中本工具不認得的欄位（tavern_helper 等擴充、create_date…）原樣保留。
+    """
+    card = scenario.card
+    if card is None:
+        raise CardFormatError("這個情境沒有角色卡")
+    raw = json.loads(json.dumps(card.raw or {}))
+    raw.pop("json_data", None)
+    raw.pop("chat", None)  # ST unsetPrivateFields
+    raw_data = raw.get("data") if isinstance(raw.get("data"), dict) else ({} if raw.get("spec") else dict(raw))
+    data = json.loads(json.dumps(raw_data))
+    ext = dict(data.get("extensions") or {})
+
+    # 情境的開場白若只是切換到替代開場白，first_mes 維持原卡；若是改寫過的內容，就寫回 first_mes
+    opening = scenario.opening
+    first_mes = card.first_mes if (opening == card.first_mes or opening in card.alternate_greetings) else opening
+    name = card.name or scenario.char
+    tags = data.get("tags") if isinstance(data.get("tags"), list) else []
+
+    ext.update({
+        "talkativeness": ext.get("talkativeness", 0.5),
+        "fav": False,
+        "world": ext.get("world", card.book.name if card.book else ""),
+        "depth_prompt": {"prompt": card.depth_prompt.prompt, "depth": card.depth_prompt.depth, "role": card.depth_prompt.role},
+    })
+    if card.regex_scripts or "regex_scripts" in ext:
+        ext["regex_scripts"] = card.regex_scripts
+    data.update({
+        "name": name,
+        "description": card.description,
+        "personality": card.personality,
+        "scenario": card.scenario,
+        "first_mes": first_mes,
+        "mes_example": card.mes_example,
+        "creator_notes": card.creator_notes,
+        "system_prompt": card.system_prompt,
+        "post_history_instructions": card.post_history_instructions,
+        "tags": tags,
+        "creator": data.get("creator", ""),
+        "character_version": data.get("character_version", ""),
+        "alternate_greetings": card.alternate_greetings,
+        "extensions": ext,
+    })
+    if spec == "chara_card_v3":
+        data.setdefault("group_only_greetings", [])
+    if card.book is not None:
+        data["character_book"] = _book_out(card.book, (raw_data or {}).get("character_book"))
+    else:
+        data.pop("character_book", None)
+
+    out = {k: v for k, v in raw.items() if k not in ("data", "spec", "spec_version")}
+    out.update({
+        "name": name,
+        "description": card.description,
+        "personality": card.personality,
+        "scenario": card.scenario,
+        "first_mes": first_mes,
+        "mes_example": card.mes_example,
+        "creatorcomment": card.creator_notes,
+        "avatar": "none",
+        "talkativeness": ext["talkativeness"],
+        "fav": False,
+        "tags": tags,
+        "spec": spec,
+        "spec_version": "3.0" if spec == "chara_card_v3" else "2.0",
+        "data": data,
+    })
+    return out
+
+
+def _png_chunk(ctype: bytes, body: bytes) -> bytes:
+    return struct.pack(">I", len(body)) + ctype + body + struct.pack(">I", zlib.crc32(ctype + body) & 0xFFFFFFFF)
+
+
+def write_png_card(image: bytes, v2: dict, v3: dict) -> bytes:
+    """同 ST write()：移除既有的 chara / ccv3 tEXt，在 IEND 前寫入 chara（V2）與 ccv3（V3），內容為 base64 的 UTF-8 JSON。"""
+    if not image.startswith(PNG_SIGNATURE):
+        raise CardFormatError("不是 PNG 檔")
+    out = [PNG_SIGNATURE]
+    i = len(PNG_SIGNATURE)
+    while i + 8 <= len(image):
+        (length,) = struct.unpack(">I", image[i : i + 4])
+        ctype = image[i + 4 : i + 8]
+        chunk = image[i : i + 12 + length]
+        body = image[i + 8 : i + 8 + length]
+        i += 12 + length
+        if ctype == b"tEXt" and b"\0" in body and body.split(b"\0", 1)[0].decode("latin-1").lower() in ("chara", "ccv3"):
+            continue
+        if ctype == b"IEND":
+            for key, obj in ((b"chara", v2), (b"ccv3", v3)):
+                text = base64.b64encode(json.dumps(obj, ensure_ascii=False).encode("utf-8"))
+                out.append(_png_chunk(b"tEXt", key + b"\0" + text))
+            out.append(chunk)
+            break
+        out.append(chunk)
+    return b"".join(out)
+
+
+def placeholder_png(width: int = 400, height: int = 600, rgb: tuple[int, int, int] = (232, 224, 210)) -> bytes:
+    """沒有原始圖片時用的純色 PNG（ST 匯入時需要一張圖）。"""
+    row = b"\x00" + bytes(rgb) * width
+    raw = zlib.compress(row * height, 9)
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return PNG_SIGNATURE + _png_chunk(b"IHDR", ihdr) + _png_chunk(b"IDAT", raw) + _png_chunk(b"IEND", b"")
