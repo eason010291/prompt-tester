@@ -319,6 +319,17 @@ MIGRATIONS: list[tuple[int, str]] = [
         ALTER TABLE agent_rounds ADD COLUMN result_revision INTEGER;
         """,
     ),
+    (
+        12,
+        # 匯入角色卡時保存原始 PNG，匯出 PNG 時沿用同一張圖（只替換卡片資料）
+        """
+        CREATE TABLE card_images (
+            scenario_id INTEGER PRIMARY KEY,
+            filename    TEXT NOT NULL,
+            png         BLOB NOT NULL
+        );
+        """,
+    ),
 ]
 
 

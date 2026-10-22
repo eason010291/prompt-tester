@@ -1,7 +1,9 @@
 import base64
+import json
 import sqlite3
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 
 from .. import scenario_revisions as revisions
@@ -37,7 +39,8 @@ class CardImportResult(BaseModel):
 def import_card(body: CardImport, conn: sqlite3.Connection = Depends(get_db)) -> CardImportResult:
     """從 ST 角色卡（JSON / PNG）建立情境：開場白取 first_mes，其餘欄位進 card。"""
     try:
-        raw = st_card.load_card_bytes(base64.b64decode(body.data_base64), body.filename)
+        file_bytes = base64.b64decode(body.data_base64)
+        raw = st_card.load_card_bytes(file_bytes, body.filename)
         card, notes = st_card.parse_card(raw)
     except (st_card.CardFormatError, ValueError) as e:
         raise HTTPException(422, str(e)) from e
@@ -50,7 +53,13 @@ def import_card(body: CardImport, conn: sqlite3.Connection = Depends(get_db)) ->
     )
     if card.alternate_greetings:
         notes.append(f"另有 {len(card.alternate_greetings)} 個替代開場白，可在情境頁切換。")
-    return CardImportResult(scenario=store.save_scenario(conn, scenario), notes=notes)
+    saved = store.save_scenario(conn, scenario)
+    if file_bytes.startswith(st_card.PNG_SIGNATURE):
+        # 保存原圖，匯出 PNG 時沿用
+        with conn:
+            conn.execute("INSERT OR REPLACE INTO card_images (scenario_id, filename, png) VALUES (?, ?, ?)",
+                         (saved.id, body.filename, file_bytes))
+    return CardImportResult(scenario=saved, notes=notes)
 
 
 @router.get("/{sid}")
@@ -135,3 +144,42 @@ def restore_revision(sid: int, rid: int, conn: sqlite3.Connection = Depends(get_
         return revisions.restore(conn, sid, rid)
     except KeyError as e:
         raise HTTPException(404, str(e).strip("'")) from e
+
+
+# ---- 匯出角色卡（ST 格式） ----
+
+def _download_name(name: str, ext: str) -> str:
+    safe = "".join(c for c in name if c not in '\\/:*?"<>|').strip() or "character"
+    return f"attachment; filename=\"card.{ext}\"; filename*=UTF-8''{quote(safe + '.' + ext)}"
+
+
+@router.get("/{sid}/export")
+def export_card(sid: int, format: str = "json", spec: str = "v3", conn: sqlite3.Connection = Depends(get_db)) -> Response:
+    """匯出角色卡，格式與 SillyTavern 1.18.0 相同。
+
+    - json：spec=v3（chara_card_v3，預設）或 v2；頂層保留 V1 欄位，完整資料在 data。
+    - png：沿用匯入時的原圖（沒有原圖時用純色預設圖），寫入 chara（V2）與 ccv3（V3）兩個 tEXt 區塊。
+    """
+    s = _scenario_or_404(conn, sid)
+    if s.card is None:
+        raise HTTPException(422, "這個情境沒有角色卡（手動建立的情境無法匯出成角色卡）")
+    name = s.card.name or s.char
+    if format == "json":
+        card = st_card.export_card(s, "chara_card_v3" if spec == "v3" else "chara_card_v2")
+        return Response(json.dumps(card, ensure_ascii=False, indent=4), media_type="application/json",
+                        headers={"Content-Disposition": _download_name(name, "json")})
+    if format == "png":
+        row = conn.execute("SELECT png FROM card_images WHERE scenario_id = ?", (sid,)).fetchone()
+        image = row["png"] if row else st_card.placeholder_png()
+        png = st_card.write_png_card(image, st_card.export_card(s, "chara_card_v2"), st_card.export_card(s, "chara_card_v3"))
+        return Response(png, media_type="image/png", headers={
+            "Content-Disposition": _download_name(name, "png"),
+            "X-Card-Image": "original" if row else "placeholder",
+        })
+    raise HTTPException(422, "format 必須是 json 或 png")
+
+
+@router.get("/{sid}/card-image")
+def card_image(sid: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    row = conn.execute("SELECT filename FROM card_images WHERE scenario_id = ?", (sid,)).fetchone()
+    return {"has_image": row is not None, "filename": row["filename"] if row else None}

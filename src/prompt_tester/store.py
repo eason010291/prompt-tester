@@ -49,6 +49,7 @@ def delete_scenario(conn: sqlite3.Connection, sid: int) -> None:
     with conn:
         conn.execute("DELETE FROM scenarios WHERE id = ?", (sid,))
         conn.execute("DELETE FROM scenario_revisions WHERE scenario_id = ?", (sid,))
+        conn.execute("DELETE FROM card_images WHERE scenario_id = ?", (sid,))
 
 
 def starter_scenario() -> Scenario:
