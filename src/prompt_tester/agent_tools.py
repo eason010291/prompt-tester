@@ -14,6 +14,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, ValidationError
 
 from . import experiments, feedback, metrics, store, vcs, workspace
+from . import scenario_revisions as revisions
+from .entities import Scenario
 from .preset import POSITION_IN_CHAT, Block, Preset
 from .routes.prompt import build_for, get_workspace, resolve_scenario
 
@@ -49,6 +51,8 @@ class AgentSettings(BaseModel):
     allow_params: bool = True
     # 是否允許外部 agent 執行實驗（會產生 LLM 費用）
     allow_run_experiment: bool = False
+    # 是否允許修改角色卡時改開場白（開場白也是每條對話的起點，改了會失去與舊實驗的對照）
+    allow_opening: bool = False
 
 
 def load_settings(conn: sqlite3.Connection) -> AgentSettings:
@@ -79,6 +83,8 @@ class Ctx:
     branch_prefix: str = "llm"
     changed: bool = False
     committed: dict | None = None
+    # 內建迴圈修改角色卡時，只能動這個情境
+    scenario_id: int | None = None
 
 
 @dataclass
@@ -89,6 +95,8 @@ class Tool:
     fn: Callable[[Ctx, Any], Any]
     builtin: bool = True  # 內建迴圈預設提供
     gate: str | None = None  # 需要開啟的設定欄位
+    # preset：改預設；card：改角色卡；read：唯讀（兩種修改都提供）
+    group: str = "preset"
 
     def schema(self) -> dict:
         s = self.args.model_json_schema()
@@ -101,9 +109,10 @@ class Tool:
 REGISTRY: dict[str, Tool] = {}
 
 
-def tool(name: str, description: str, args: type[BaseModel], *, builtin: bool = True, gate: str | None = None):
+def tool(name: str, description: str, args: type[BaseModel], *, builtin: bool = True, gate: str | None = None,
+         group: str = "preset"):
     def deco(fn):
-        REGISTRY[name] = Tool(name, description, args, fn, builtin, gate)
+        REGISTRY[name] = Tool(name, description, args, fn, builtin, gate, group)
         return fn
 
     return deco
@@ -139,8 +148,10 @@ def openai_tools(names: list[str] | None = None) -> list[dict]:
     ]
 
 
-def builtin_names(settings: AgentSettings) -> list[str]:
-    return [t.name for t in REGISTRY.values() if t.builtin and (not t.gate or getattr(settings, t.gate))]
+def builtin_names(settings: AgentSettings, target: str = "preset") -> list[str]:
+    """內建迴圈一輪只改一個對象：唯讀工具 + 該對象的修改工具。"""
+    return [t.name for t in REGISTRY.values()
+            if t.builtin and t.group in ("read", target) and (not t.gate or getattr(settings, t.gate))]
 
 
 def to_text(result: Any, limit: int = MAX_RESULT_CHARS) -> str:
@@ -336,7 +347,7 @@ class Preview(BaseModel):
     max_chars: int = Field(1500, description="每則訊息最多回傳幾字")
 
 
-@tool("preview", "組裝工作區預設，回傳實際送給模型的 messages（含每段來自哪些區塊）與組裝警告。", Preview)
+@tool("preview", "組裝工作區預設，回傳實際送給模型的 messages（含每段來自哪些區塊）與組裝警告。", Preview, group="read")
 def preview(ctx: Ctx, a: Preview) -> dict:
     ws = get_workspace(ctx.conn)
     context = ws.context.model_copy(update={"scenario_id": a.scenario_id}) if a.scenario_id else ws.context
@@ -394,7 +405,7 @@ class GetFeedback(BaseModel):
     reply_chars: int = Field(2500, description="附上的回覆原文最多幾字")
 
 
-@tool("get_feedback", "讀取使用者的評語（含分數）與被評的回覆原文。不帶參數時回傳最近 30 則。", GetFeedback)
+@tool("get_feedback", "讀取使用者的評語（含分數）與被評的回覆原文。不帶參數時回傳最近 30 則。", GetFeedback, group="read")
 def get_feedback(ctx: Ctx, a: GetFeedback) -> dict:
     conn = ctx.conn
     if a.experiment_id is not None:
@@ -438,7 +449,7 @@ class GetReply(BaseModel):
     message_id: int
 
 
-@tool("get_reply", "讀取一則試跑訊息的完整原文，以及它之前的使用者發言。", GetReply)
+@tool("get_reply", "讀取一則試跑訊息的完整原文，以及它之前的使用者發言。", GetReply, group="read")
 def get_reply(ctx: Ctx, a: GetReply) -> dict:
     m = ctx.conn.execute("SELECT * FROM run_messages WHERE id = ?", (a.message_id,)).fetchone()
     if m is None:
@@ -454,7 +465,7 @@ def get_reply(ctx: Ctx, a: GetReply) -> dict:
     }
 
 
-@tool("list_scenarios", "列出情境（id、名稱、角色）。", NoArgs)
+@tool("list_scenarios", "列出情境（id、名稱、角色）。", NoArgs, group="read")
 def list_scenarios(ctx: Ctx, _: NoArgs) -> list[dict]:
     return [{"id": s.id, "name": s.name, "char": s.char, "user": s.user, "has_card": s.card is not None}
             for s in store.list_scenarios(ctx.conn)]
@@ -521,4 +532,198 @@ def run_experiment(ctx: Ctx, a: RunExperiment) -> dict:
         exp_id = experiments.create_and_start(ctx.conn, ctx.manager, name=a.name, preset=preset, script_id=a.script_id,
                                               scenario_ids=a.scenario_ids, connection_id=a.connection_id)
     return {"ok": True, "experiment_id": exp_id, "note": "實驗在背景執行；用 get_experiment 查看進度"}
+
+
+# ---- 角色卡（情境的「作品」部分；測試夾具不提供寫入） ----
+
+CardField = Literal["description", "personality", "scenario", "mes_example", "system_prompt",
+                    "post_history_instructions", "depth_prompt", "opening"]
+
+
+def _card_scenario(ctx: Ctx, sid: int) -> Scenario:
+    if ctx.scenario_id is not None and sid != ctx.scenario_id:
+        raise ToolError(f"這一輪只能修改情境 #{ctx.scenario_id} 的角色卡")
+    sc = store.get_scenario(ctx.conn, sid)
+    if sc is None:
+        raise ToolError(f"找不到情境 #{sid}（用 list_scenarios 查 id）")
+    if sc.card is None:
+        raise ToolError(f"情境 #{sid} 沒有角色卡（手動建立的情境只有測試條件，沒有可修改的卡片內容）")
+    return sc
+
+
+def _field_path(ctx: Ctx, field: str) -> str:
+    if field == "opening":
+        if not ctx.settings.allow_opening:
+            raise ToolError("開場白不開放修改（設定頁 → 修改者 LLM → 允許修改開場白）")
+        return "opening"
+    return revisions.CARD_FIELDS[field]
+
+
+def _save_card(ctx: Ctx, sc: Scenario) -> None:
+    store.save_scenario(ctx.conn, sc)
+    ctx.changed = True
+
+
+def _find_lore(sc: Scenario, uid: int):
+    book = sc.card.book if sc.card else None
+    entry = next((e for e in (book.entries if book else []) if e.uid == uid), None)
+    if entry is None:
+        raise ToolError(f"找不到世界書條目 uid={uid}（用 get_card 查）")
+    return entry
+
+
+class CardRef(BaseModel):
+    scenario_id: int
+
+
+@tool("get_card", "讀取情境的角色卡：可修改欄位的全文、世界書條目清單、目前版本。", CardRef, group="card")
+def get_card(ctx: Ctx, a: CardRef) -> dict:
+    sc = _card_scenario(ctx, a.scenario_id)
+    fields = {name: revisions.get_path(sc, path) or "" for name, path in revisions.CARD_FIELDS.items()}
+    if ctx.settings.allow_opening:
+        fields["opening"] = sc.opening
+    book = sc.card.book
+    revs = revisions.list_revisions(ctx.conn, sc.id)
+    return {
+        "scenario": sc.name, "char": sc.char,
+        "version": revs[0]["number"] if revs else None,
+        "unsaved_changes": revisions.is_dirty(ctx.conn, sc),
+        "fields": fields,
+        "opening_editable": ctx.settings.allow_opening,
+        "lore": [{"uid": e.uid, "comment": e.comment, "keys": e.keys, "enabled": e.enabled, "constant": e.constant,
+                  "chars": len(e.content)} for e in (book.entries if book else [])],
+        "note": "既有歷史、逐回合使用者輸入、使用者人設與目標是測試條件，不能修改。",
+    }
+
+
+class LoreRef(BaseModel):
+    scenario_id: int
+    uid: int
+
+
+@tool("get_lore_entry", "讀取一個世界書條目的完整內容與設定。", LoreRef, group="card")
+def get_lore_entry(ctx: Ctx, a: LoreRef) -> dict:
+    sc = _card_scenario(ctx, a.scenario_id)
+    return _find_lore(sc, a.uid).model_dump()
+
+
+class EditCardField(BaseModel):
+    scenario_id: int
+    field: CardField
+    content: str = Field(description="新的完整內容")
+
+
+@tool("edit_card_field", "以新內容取代角色卡的整個欄位（大幅改寫時用；小修改請用 patch_card_field）。", EditCardField, group="card")
+def edit_card_field(ctx: Ctx, a: EditCardField) -> dict:
+    sc = _card_scenario(ctx, a.scenario_id)
+    path = _field_path(ctx, a.field)
+    old = revisions.get_path(sc, path) or ""
+    revisions.set_path(sc, path, a.content)
+    _save_card(ctx, sc)
+    return {"ok": True, "field": a.field, "chars": f"{len(old)} → {len(a.content)}"}
+
+
+class PatchCardField(BaseModel):
+    scenario_id: int
+    field: CardField
+    find: str = Field(description="要替換的原文片段，必須在欄位中恰好出現一次")
+    replace: str = Field(description="替換成的文字；空字串代表刪除")
+
+
+def _patch(text: str, find: str, replace: str) -> str:
+    if not find:
+        raise ToolError("find 不能是空的")
+    n = text.count(find)
+    if n == 0:
+        raise ToolError("find 找不到；請先讀原文後逐字複製")
+    if n > 1:
+        raise ToolError(f"find 出現 {n} 次，請加長片段使其唯一")
+    return text.replace(find, replace, 1)
+
+
+@tool("patch_card_field", "在角色卡欄位中把唯一出現的一段原文替換掉。", PatchCardField, group="card")
+def patch_card_field(ctx: Ctx, a: PatchCardField) -> dict:
+    sc = _card_scenario(ctx, a.scenario_id)
+    path = _field_path(ctx, a.field)
+    revisions.set_path(sc, path, _patch(revisions.get_path(sc, path) or "", a.find, a.replace))
+    _save_card(ctx, sc)
+    return {"ok": True, "field": a.field, "chars": len(revisions.get_path(sc, path))}
+
+
+class PatchLore(BaseModel):
+    scenario_id: int
+    uid: int
+    find: str
+    replace: str
+
+
+@tool("patch_lore_entry", "在世界書條目內容中把唯一出現的一段原文替換掉。", PatchLore, group="card")
+def patch_lore_entry(ctx: Ctx, a: PatchLore) -> dict:
+    sc = _card_scenario(ctx, a.scenario_id)
+    e = _find_lore(sc, a.uid)
+    e.content = _patch(e.content, a.find, a.replace)
+    _save_card(ctx, sc)
+    return {"ok": True, "uid": a.uid, "chars": len(e.content)}
+
+
+class EditLore(BaseModel):
+    scenario_id: int
+    uid: int
+    content: str | None = Field(None, description="新的完整內容；省略則不改")
+    keys: list[str] | None = Field(None, description="新的關鍵字；省略則不改")
+
+
+@tool("edit_lore_entry", "改寫世界書條目的內容或關鍵字。", EditLore, group="card")
+def edit_lore_entry(ctx: Ctx, a: EditLore) -> dict:
+    sc = _card_scenario(ctx, a.scenario_id)
+    e = _find_lore(sc, a.uid)
+    if a.content is None and a.keys is None:
+        raise ToolError("沒有要修改的欄位")
+    if a.content is not None:
+        e.content = a.content
+    if a.keys is not None:
+        e.keys = a.keys
+    _save_card(ctx, sc)
+    return {"ok": True, "uid": a.uid}
+
+
+class ToggleLore(BaseModel):
+    scenario_id: int
+    uid: int
+    enabled: bool
+
+
+@tool("toggle_lore_entry", "啟用或停用一個世界書條目。", ToggleLore, group="card")
+def toggle_lore_entry(ctx: Ctx, a: ToggleLore) -> dict:
+    sc = _card_scenario(ctx, a.scenario_id)
+    e = _find_lore(sc, a.uid)
+    e.enabled = a.enabled
+    _save_card(ctx, sc)
+    return {"ok": True, "uid": a.uid, "enabled": a.enabled}
+
+
+@tool("diff_card", "列出角色卡相對於最新版本改了什麼（提交前檢查用）。", CardRef, group="card")
+def diff_card(ctx: Ctx, a: CardRef) -> dict:
+    sc = _card_scenario(ctx, a.scenario_id)
+    last = revisions.latest(ctx.conn, sc.id)
+    if last is None:
+        return {"note": "還沒有任何版本，提交後會成為第一版"}
+    d = revisions.diff(revisions.scenario_of(revisions.get(ctx.conn, last["id"]), sc.id), sc)
+    return {"fields": [f["label"] for f in d["fields"]],
+            "lore": [{"uid": x["uid"], "comment": x["comment"], "status": x["status"], "changes": x["changes"]} for x in d["lore"]]}
+
+
+class CommitCard(BaseModel):
+    scenario_id: int
+    message: str = Field(description="說明：改了哪些欄位 / 條目、針對哪些評語、預期效果")
+
+
+@tool("commit_card", "把角色卡目前的內容存成新版本，結束這一輪修改。", CommitCard, group="card")
+def commit_card(ctx: Ctx, a: CommitCard) -> dict:
+    sc = _card_scenario(ctx, a.scenario_id)
+    rev, created = revisions.create(ctx.conn, sc, author=ctx.author, message=a.message, meta=ctx.meta)
+    if not created:
+        raise ToolError("沒有變更可以提交")
+    ctx.committed = {"revision": rev["id"], "scenario_id": sc.id}
+    return {"ok": True, "revision": rev["id"]}
 

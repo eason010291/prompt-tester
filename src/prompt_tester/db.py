@@ -297,6 +297,28 @@ MIGRATIONS: list[tuple[int, str]] = [
         CREATE INDEX probes_run ON probes(run_id, turn);
         """,
     ),
+    (
+        11,
+        # 情境（角色卡）的線性修訂紀錄；LLM 修改可指定對象（預設 / 角色卡）
+        """
+        CREATE TABLE scenario_revisions (
+            id          INTEGER PRIMARY KEY,
+            scenario_id INTEGER NOT NULL,
+            created_at  TEXT NOT NULL,
+            author      TEXT NOT NULL,
+            message     TEXT NOT NULL,
+            hash        TEXT NOT NULL,
+            data        TEXT NOT NULL,
+            parent_id   INTEGER,
+            meta        TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX scenario_revisions_scenario ON scenario_revisions(scenario_id, id DESC);
+        ALTER TABLE agent_rounds ADD COLUMN target TEXT NOT NULL DEFAULT 'preset';
+        ALTER TABLE agent_rounds ADD COLUMN scenario_id INTEGER;
+        ALTER TABLE agent_rounds ADD COLUMN base_revision INTEGER;
+        ALTER TABLE agent_rounds ADD COLUMN result_revision INTEGER;
+        """,
+    ),
 ]
 
 

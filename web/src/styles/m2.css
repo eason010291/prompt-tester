@@ -1935,3 +1935,61 @@ label.inline input[type='number'] {
   background: color-mix(in srgb, var(--warning) 22%, var(--bg-card));
   color: var(--text-strong);
 }
+
+/* ---- 情境版本 ---- */
+
+.scenario-versions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.version-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px var(--s-sm);
+}
+
+.version-msg {
+  flex: 1 1 200px;
+  min-width: 160px;
+}
+
+.warn-text {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.version-history ul {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.version-history li.active {
+  padding: 6px;
+  border-radius: var(--r-md);
+  background: var(--bg-soft);
+}
+
+.version-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.scenario-diff {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.diff-entry > summary {
+  cursor: pointer;
+  font-size: 13px;
+}

@@ -729,6 +729,10 @@ function ModifierForm({ initial, connections, onSaved }: { initial: AgentSetting
           <input type="checkbox" checked={s.allow_run_experiment} onChange={(e) => set({ allow_run_experiment: e.target.checked })} />
           允許外部 agent 執行實驗（會產生 LLM 費用）
         </label>
+        <label className="check">
+          <input type="checkbox" checked={s.allow_opening} onChange={(e) => set({ allow_opening: e.target.checked })} />
+          修改角色卡時允許改開場白（改了會失去與舊實驗的對照）
+        </label>
       </div>
       <label className="stack">
         系統提示詞（修改後舊版會保留，可還原）

@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from . import feedback, providers, store, vcs
 from . import metrics as metrics_mod
+from . import scenario_revisions as revisions
 from .entities import Connection, ReasoningEffort, Scenario
 from .preset import HistoryMessage, Preset
 from .runner import CallResult, RunSpec, UserSimSettings, request_body, run_session, scripted_turns, stream_call
@@ -203,11 +204,13 @@ def create(
     if not scenario_ids:
         raise ExperimentError("請至少選一個情境")
     scenarios = {}
+    revs: dict[str, int] = {}
     for sid in scenario_ids:
         sc = store.get_scenario(conn, sid)
         if sc is None:
             raise ExperimentError(f"找不到情境 #{sid}")
         scenarios[str(sid)] = sc.model_dump(mode="json")
+        revs[str(sid)] = revisions.ensure(conn, sc, message="建立實驗時自動存成版本")["id"]
     provider_for(conn, connection_id, "角色")
     _check_user_sim(conn, script, [Scenario.model_validate(s) for s in scenarios.values()])
     preset_hash = store.snapshot_preset(conn, preset)
@@ -220,7 +223,7 @@ def create(
             (
                 store.now_iso(), name, preset.name, preset_hash, vcs.commit_for_tree(conn, vcs.tree_id_of(preset)),
                 script_id, script_name, script.model_dump_json(), snapshot_hash(script), json.dumps(scenario_ids),
-                connection_id, rerun_of, json.dumps({"scenarios": scenarios}, ensure_ascii=False),
+                connection_id, rerun_of, json.dumps({"scenarios": scenarios, "scenario_revisions": revs}, ensure_ascii=False),
             ),
         ).lastrowid
     return exp_id
@@ -907,13 +910,23 @@ def retry_stats(conn: sqlite3.Connection, experiment_id: int | None = None) -> d
 
 # ---- 迴歸試算（不寫入實驗） ----
 
-def diff_workspace(conn: sqlite3.Connection, exp_id: int, preset: Preset) -> dict:
+def diff_workspace(conn: sqlite3.Connection, exp_id: int, preset: Preset, scenario_id: int | None = None) -> dict:
+    """實驗用的版本 → 目前的預設（工作區）與角色卡。"""
     exp = get_raw(conn, exp_id)
     if exp is None:
         raise KeyError(f"找不到實驗 #{exp_id}")
     old = _preset(conn, exp["preset_hash"])
-    return {"same": vcs.tree_id_of(old) == vcs.tree_id_of(preset), "diff": vcs.diff_presets(old, preset),
-            "experiment_commit": exp["commit_id"], "preset_name": exp["preset_name"]}
+    same_preset = vcs.tree_id_of(old) == vcs.tree_id_of(preset)
+    card = None
+    if scenario_id is not None and str(scenario_id) in exp["state"].get("scenarios", {}):
+        current = store.get_scenario(conn, scenario_id)
+        if current is not None:
+            card = revisions.diff(Scenario.model_validate(exp["state"]["scenarios"][str(scenario_id)]), current)
+            # 測試夾具（歷史、使用者輸入…）不會用在試算 / 驗證，只列角色卡的差異
+            card["fields"] = [f for f in card["fields"] if f["group"] == "card"]
+    card_changed = bool(card and card["card_changed"])
+    return {"same": same_preset and not card_changed, "same_preset": same_preset, "diff": vcs.diff_presets(old, preset),
+            "card": card, "experiment_commit": exp["commit_id"], "preset_name": exp["preset_name"]}
 
 
 def list_probes(conn: sqlite3.Connection, run_id: int, turn: int) -> list[dict]:
@@ -940,7 +953,7 @@ async def probe(conn: sqlite3.Connection, http: httpx.AsyncClient, exp_id: int, 
     if user is None:
         raise ExperimentError(f"第 {turn} 回合沒有使用者發言，無法試算")
     connection, provider = provider_for(conn, exp["connection_id"], "角色")
-    sc = Scenario.model_validate(run["scenario"])
+    sc = revisions.with_current_card(Scenario.model_validate(run["scenario"]), store.get_scenario(conn, run["scenario_id"]))
     stop_idx = target["idx"] if target else user["idx"] + 1
     history = sc.chat() + [HistoryMessage(role=m["role"], content=m["content"]) for m in run["messages"]
                            if m["idx"] < stop_idx and not m["error"]]
@@ -983,7 +996,12 @@ def create_verify(conn: sqlite3.Connection, manager: "Manager", origin_id: int, 
         raise ExperimentError("沒有可以驗證的分支")
     provider_for(conn, origin["connection_id"], "角色")
     preset_hash = store.snapshot_preset(conn, preset)
-    state = {"scenarios": origin["state"].get("scenarios", {}), "partial_from": from_stage}
+    revs = {}
+    for sid in origin["scenario_ids"]:
+        current = store.get_scenario(conn, sid)
+        if current is not None:
+            revs[str(sid)] = revisions.ensure(conn, current, message="建立驗證輪次時自動存成版本")["id"]
+    state = {"scenarios": origin["state"].get("scenarios", {}), "partial_from": from_stage, "scenario_revisions": revs}
     with conn:
         exp_id = conn.execute(
             """INSERT INTO experiments (created_at, name, status, current_stage, preset_name, preset_hash, commit_id,
@@ -1006,7 +1024,8 @@ def create_verify(conn: sqlite3.Connection, manager: "Manager", origin_id: int, 
         user_conn = Connection.model_validate(run["user_connection"]) if run["user_connection"] else None
         rid = store.create_run(
             conn, mode="live", replay_of=None, turns=run["turns"], seed=run["seed"], preset=preset, preset_hash=preset_hash,
-            commit_id=vcs.commit_for_tree(conn, vcs.tree_id_of(preset)), scenario=Scenario.model_validate(run["scenario"]),
+            commit_id=vcs.commit_for_tree(conn, vcs.tree_id_of(preset)),
+            scenario=revisions.with_current_card(Scenario.model_validate(run["scenario"]), store.get_scenario(conn, run["scenario_id"])),
             connection=connection, user_connection=user_conn, user_settings=us, status="queued", experiment_id=exp_id,
             stage=from_stage, parent_run_id=None, temperature=run["temperature"],
         )

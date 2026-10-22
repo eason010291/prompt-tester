@@ -15,6 +15,7 @@ import httpx
 
 from . import agent_tools as at
 from . import experiments, llm, store, vcs, workspace
+from . import scenario_revisions as revisions
 from .preset import Params
 from .runner import estimate_cost, request_body
 
@@ -58,13 +59,23 @@ def _update(conn: sqlite3.Connection, rid: int, **fields) -> None:
         conn.execute(f"UPDATE agent_rounds SET {cols} WHERE id = ?", (*vals, rid))
 
 
-def initial_message(ctx: at.Ctx, instructions: str, experiment_id: int | None) -> str:
-    parts = [f"【使用者的要求】\n{instructions.strip() or '依下方評語改善預設。'}"]
-    parts.append("【目前的預設（list_blocks）】\n" + at.to_text(at.call(ctx, "list_blocks", {}), 12000))
+CARD_TARGET_NOTE = """【這一輪的修改對象：角色卡】
+這一輪只修改情境 #{sid} 的角色卡（描述、個性、卡片情境、範例對話、system prompt、post-history、深度提示、世界書條目{opening}），預設不能改。
+既有歷史、逐回合使用者輸入、使用者人設與目標是測試條件，不能修改。改完後呼叫 commit_card（不是 commit）。"""
+
+
+def initial_message(ctx: at.Ctx, instructions: str, experiment_id: int | None, target: str = "preset") -> str:
+    what = "角色卡" if target == "card" else "預設"
+    parts = [f"【使用者的要求】\n{instructions.strip() or f'依下方評語改善{what}。'}"]
+    if target == "card":
+        parts.append(CARD_TARGET_NOTE.format(sid=ctx.scenario_id, opening="、開場白" if ctx.settings.allow_opening else ""))
+        parts.append("【目前的角色卡（get_card）】\n" + at.to_text(at.call(ctx, "get_card", {"scenario_id": ctx.scenario_id}), 30000))
+    else:
+        parts.append("【目前的預設（list_blocks）】\n" + at.to_text(at.call(ctx, "list_blocks", {}), 12000))
     if experiment_id is not None:
         fb = at.call(ctx, "get_feedback", {"experiment_id": experiment_id})
         parts.append(f"【實驗 #{experiment_id} 的評語（get_feedback）】\n" + at.to_text(fb, 40000))
-    parts.append("請開始：必要時讀取區塊全文，修改後呼叫 commit。")
+    parts.append("請開始：必要時讀取全文，修改後呼叫 commit_card。" if target == "card" else "請開始：必要時讀取區塊全文，修改後呼叫 commit。")
     return "\n\n".join(parts)
 
 
@@ -82,7 +93,7 @@ class Manager:
         return None
 
     def start(self, *, instructions: str, experiment_id: int | None, auto_rerun: bool,
-              connection_id: int | None = None) -> int:
+              connection_id: int | None = None, target: str = "preset", scenario_id: int | None = None) -> int:
         conn = self.conn
         if self.running() is not None:
             raise ModifierError("已經有一輪修改在進行中")
@@ -101,19 +112,34 @@ class Manager:
                 raise ModifierError("這個實驗還沒有評語；先寫評語，或在要求欄說明要改什麼")
         if experiment_id is None and not instructions.strip():
             raise ModifierError("請寫下要修改的方向")
-        _, base = workspace.head(conn)
-        if base is None:
-            raise ModifierError("還沒有任何提交；請先提交一次作為修改的基準")
-        if workspace.is_dirty(conn):
-            raise ModifierError("工作區有未提交的變更；請先提交或捨棄，修改結果才不會混在一起")
-        branch = workspace.ensure_unprotected_branch(conn, "llm")
+        base = branch = base_revision = None
+        if target == "card":
+            sc = store.get_scenario(conn, scenario_id) if scenario_id is not None else None
+            if sc is None:
+                raise ModifierError("請選擇要修改角色卡的情境")
+            if sc.card is None:
+                raise ModifierError(f"情境「{sc.name}」沒有角色卡")
+            if experiment_id is not None and scenario_id not in experiments.get_raw(conn, experiment_id)["scenario_ids"]:
+                raise ModifierError("這個情境不在實驗裡")
+            # 修改前的內容自動存成版本，作為這輪的基準（可捨棄還原）
+            base_revision = revisions.ensure(conn, sc, message="LLM 修改角色卡前自動存成版本")["id"]
+        elif target == "preset":
+            _, base = workspace.head(conn)
+            if base is None:
+                raise ModifierError("還沒有任何提交；請先提交一次作為修改的基準")
+            if workspace.is_dirty(conn):
+                raise ModifierError("工作區有未提交的變更；請先提交或捨棄，修改結果才不會混在一起")
+            branch = workspace.ensure_unprotected_branch(conn, "llm")
+        else:
+            raise ModifierError("修改對象必須是 preset 或 card")
         with conn:
             rid = conn.execute(
                 """INSERT INTO agent_rounds (created_at, status, author, connection, instructions, experiment_id,
-                                             auto_rerun, base_commit, branch)
-                   VALUES (?, 'running', ?, ?, ?, ?, ?, ?, ?)""",
+                                             auto_rerun, base_commit, branch, target, scenario_id, base_revision)
+                   VALUES (?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (store.now_iso(), f"llm:{connection.model}", connection.model_dump_json(), instructions,
-                 experiment_id, int(auto_rerun), base, branch),
+                 experiment_id, int(auto_rerun), base, branch, target, scenario_id if target == "card" else None,
+                 base_revision),
             ).lastrowid
         self.tasks[rid] = asyncio.create_task(self._run(rid, cid, settings))
         return rid
@@ -136,8 +162,9 @@ class Manager:
         connection, provider = experiments.provider_for(conn, connection_id, "修改者")
         ctx = at.Ctx(conn=conn, author=rnd["author"], settings=settings, manager=self.experiments,
                      meta={"round_id": rid, "experiment_id": rnd["experiment_id"], "model": connection.model},
-                     branch_prefix="llm")
-        names = at.builtin_names(settings)
+                     branch_prefix="llm", scenario_id=rnd["scenario_id"])
+        target = rnd["target"]
+        names = at.builtin_names(settings, target)
         tools = at.openai_tools(names)
         steps: list[dict] = []
         cost, n_calls = 0.0, 0
@@ -145,7 +172,7 @@ class Manager:
         try:
             messages: list[dict] = [
                 {"role": "system", "content": settings.system_prompt},
-                {"role": "user", "content": initial_message(ctx, rnd["instructions"], rnd["experiment_id"])},
+                {"role": "user", "content": initial_message(ctx, rnd["instructions"], rnd["experiment_id"], target)},
             ]
             for step in range(1, settings.max_steps + 1):
                 body = request_body(messages, Params(), connection, None, provider,
@@ -232,7 +259,10 @@ class Manager:
         fields: dict = {"status": status, "error": error, "final_message": final, "steps": steps, "cost": cost,
                         "tool_calls": n_calls}
         if ctx.committed:
-            fields |= {"status": "done", "result_commit": ctx.committed["commit"], "branch": ctx.committed["branch"]}
+            if "revision" in ctx.committed:
+                fields |= {"status": "done", "result_revision": ctx.committed["revision"]}
+            else:
+                fields |= {"status": "done", "result_commit": ctx.committed["commit"], "branch": ctx.committed["branch"]}
             if rnd["auto_rerun"] and rnd["experiment_id"] is not None:
                 try:
                     fields["rerun_experiment_id"] = experiments.create_rerun(
@@ -248,8 +278,12 @@ def discard(conn: sqlite3.Connection, rid: int) -> None:
     rnd = get_round(conn, rid)
     if rnd is None:
         raise ModifierError(f"找不到修改紀錄 #{rid}")
-    if rnd["result_commit"]:
-        raise ModifierError("這輪已經提交；要放棄請在版本樹切回原本的版本")
+    if rnd["result_commit"] or rnd["result_revision"]:
+        raise ModifierError("這輪已經提交；要放棄請在版本樹（預設）或情境頁的版本紀錄（角色卡）切回原本的版本")
+    if rnd["target"] == "card":
+        revisions.restore(conn, rnd["scenario_id"], rnd["base_revision"])
+        _update(conn, rid, status="cancelled" if rnd["status"] == "running" else rnd["status"], error="已捨棄修改")
+        return
     branch, base = workspace.head(conn)
     if base != rnd["base_commit"]:
         raise ModifierError("工作區已經換到別的版本，無法自動還原")

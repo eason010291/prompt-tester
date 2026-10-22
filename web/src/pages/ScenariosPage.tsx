@@ -1,9 +1,10 @@
-import { useState, type ChangeEvent } from 'react'
+import { useState, type ChangeEvent, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router'
 import { api } from '../api'
 import CardSection from '../components/CardSection'
 import HistoryEditor from '../components/HistoryEditor'
 import ScenarioTrial from '../components/ScenarioTrial'
+import ScenarioVersions from '../components/ScenarioVersions'
 import { useAutosave, useResource } from '../hooks/useResource'
 import { newScenario, type Scenario } from '../types'
 
@@ -28,6 +29,7 @@ export default function ScenariosPage() {
 
   const [notes, setNotes] = useState<{ title: string; lines: string[] } | null>(null)
   const [justImported, setJustImported] = useState<number | null>(null)
+  const [restoreKey, setRestoreKey] = useState(0)
 
   const importCard = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -104,7 +106,17 @@ export default function ScenariosPage() {
 
       {selected && (
         <ScenarioEditor
-          key={selected.id}
+          key={`${selected.id}:${restoreKey}`}
+          versions={
+            <ScenarioVersions
+              scenarioId={selected.id!}
+              refreshKey={selected.updated_at ?? ''}
+              onRestored={(s) => {
+                onSaved(s)
+                setRestoreKey((k) => k + 1)
+              }}
+            />
+          }
           initial={selected}
           onSaved={onSaved}
           onDuplicate={create}
@@ -155,9 +167,11 @@ interface EditorProps {
   onDuplicate: (s: Scenario) => void
   onDelete: (s: Scenario) => void
   suggestPreflight: boolean
+  /** 版本區塊（存成版本、紀錄、還原） */
+  versions?: ReactNode
 }
 
-function ScenarioEditor({ initial, onSaved, onDuplicate, onDelete, suggestPreflight }: EditorProps) {
+function ScenarioEditor({ initial, onSaved, onDuplicate, onDelete, suggestPreflight, versions }: EditorProps) {
   const [draft, setDraft] = useState(initial)
   const state = useAutosave(draft, async (s) => {
     onSaved(await api<Scenario>(`/scenarios/${s.id}`, { method: 'PUT', body: JSON.stringify(s) }))
@@ -178,6 +192,7 @@ function ScenarioEditor({ initial, onSaved, onDuplicate, onDelete, suggestPrefli
             </button>
           </div>
         </header>
+        {versions}
 
         <div className="card">
           <div className="form-grid">

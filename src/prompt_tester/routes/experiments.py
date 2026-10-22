@@ -256,10 +256,10 @@ async def retry_stats(exp_id: int, conn: sqlite3.Connection = Depends(get_db)) -
 # ---- 迴歸試算與驗證輪次 ----
 
 @router.get("/experiments/{exp_id}/diff-workspace")
-async def diff_workspace(exp_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
-    """實驗使用的預設 → 目前工作區。"""
+async def diff_workspace(exp_id: int, scenario_id: int | None = None, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """實驗使用的版本 → 目前的預設（工作區）與角色卡（指定 scenario_id 時）。"""
     try:
-        return ex.diff_workspace(conn, exp_id, workspace.working(conn))
+        return ex.diff_workspace(conn, exp_id, workspace.working(conn), scenario_id)
     except KeyError as e:
         raise HTTPException(404, str(e).strip("'")) from e
 
