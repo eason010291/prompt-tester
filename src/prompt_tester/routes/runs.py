@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from .. import feedback, providers, store, vcs
+from .. import feedback, metrics, providers, store, vcs
 from ..preset import Preset
 from ..runner import RunSpec, UserSimSettings, run_session, scripted_turns
 from .deps import get_db, get_http
@@ -145,7 +145,16 @@ def get_run(run_id: int, requests: bool = False, preset: bool = False, conn: sql
     if preset:
         row = conn.execute("SELECT data FROM preset_snapshots WHERE hash = ?", (run["preset_hash"],)).fetchone()
         run["preset"] = json.loads(row["data"]) if row else None
+    defs = metrics.load(conn)
+    run["metrics"] = metrics.run_metrics(run["messages"], defs)
+    run["metric_defs"] = metrics.describe(defs)
     return run
+
+
+@router.get("/metrics")
+def metric_defs(conn: sqlite3.Connection = Depends(get_db)) -> list[dict]:
+    """目前啟用的自動指標（簡版：只有內建的「不是…而是…」）。"""
+    return [m.model_dump() for m in metrics.load(conn)]
 
 
 @router.get("/runs/{run_id}/archive")

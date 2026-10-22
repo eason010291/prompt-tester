@@ -1924,3 +1924,14 @@ label.inline input[type='number'] {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---- 自動指標 ---- */
+
+.chip.metric-chip {
+  background: var(--bg-sunken);
+}
+
+.chip.metric-chip.is-warn {
+  background: color-mix(in srgb, var(--warning) 22%, var(--bg-card));
+  color: var(--text-strong);
+}

@@ -95,6 +95,7 @@ export default function SettingsPage() {
       <JudgeCard connections={connections.data ?? []} />
       <FeedbackTemplateCard />
       <RetryReasonsCard />
+      <MetricsCard />
     </div>
   )
 }
@@ -821,6 +822,41 @@ function RetryReasonsForm({ initial }: { initial: string }) {
         標籤
         <textarea className="tall" value={text} onChange={(e) => setText(e.target.value)} />
       </label>
+    </section>
+  )
+}
+
+function MetricsCard() {
+  const { data } = useResource<{ id: string; name: string; pattern: string; scope: string; warn_at: number | null }[]>('/metrics')
+  if (!data) return null
+  return (
+    <section className="card">
+      <h2>自動指標</h2>
+      <p className="muted small">
+        每則角色回覆生成後自動計數，不用 LLM、不花錢；結果顯示在分支、階段、比較頁與迴歸試算，修改者讀評語時也看得到。目前是簡版，只有內建的一條，之後再開放自訂。
+      </p>
+      <table className="ep-table">
+        <thead>
+          <tr>
+            <th>名稱</th>
+            <th>規則（正則）</th>
+            <th>範圍</th>
+            <th>每則達幾次標示</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((m) => (
+            <tr key={m.id}>
+              <td>{m.name}</td>
+              <td>
+                <code>{m.pattern}</code>
+              </td>
+              <td>{m.scope === 'body' ? '只數正文（不含思考鏈、狀態欄等 HTML）' : '全文'}</td>
+              <td>{m.warn_at ?? '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </section>
   )
 }

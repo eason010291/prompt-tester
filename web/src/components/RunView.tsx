@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { api } from '../api'
 import { formatCost, useResource } from '../hooks/useResource'
 import FeedbackBox from './FeedbackBox'
+import MetricChips from './MetricChips'
 import ProbeDialog from './ProbeDialog'
 import RetryDialog, { type RetryRequest } from './RetryDialog'
 import { withDepth } from '../lib/runs'
@@ -109,6 +110,7 @@ export default function RunView({
     if (!retry || (m.role === 'user' && retry.inputMode === 'manual')) return null
     return (
       <div className="bubble-actions">
+        {m.role === 'assistant' && <MetricChips defs={r?.metric_defs} values={r?.metrics?.messages[String(m.id)]} />}
         <button className="btn btn-sm" disabled={!!lockedReason} title={lockedReason ?? '只重試這一則'} onClick={() => retryMessage(m)}>
           ↻ 重試
         </button>

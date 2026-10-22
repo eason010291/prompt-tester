@@ -6,6 +6,7 @@ import { collectScriptSets } from '../lib/st/scripts'
 import { makeMacro } from '../lib/st/regex'
 import { shortId, type ExperimentDetail, type Preset, type Probe, type Run, type RunMessage, type WorkspaceDiff } from '../types'
 import DiffView from './DiffView'
+import MetricChips from './MetricChips'
 import Modal from './Modal'
 
 const StMessage = lazy(() => import('./StMessage'))
@@ -142,6 +143,7 @@ export default function ProbeDialog({
           <div className="compare-head">
             <strong className="side-label">原本</strong>
             <span className="muted small">實驗版本</span>
+            <MetricChips defs={run.metric_defs} values={run.metrics?.messages[String(message.id)]} showZero />
           </div>
           <Suspense fallback={<pre className="msg-content">{message.content}</pre>}>
             <StMessage text={message.content} theme="st-dark" depth={0} charName={scenario.char} scriptSets={oldSets} macro={macro} />
@@ -153,6 +155,7 @@ export default function ProbeDialog({
             <span className="muted small">
               {shown && streaming === null ? `${formatCost(shown.cost)} · ${shown.served_by ?? ''}` : '工作區'}
             </span>
+            {shown && streaming === null && <MetricChips defs={run.metric_defs} values={shown.metrics} showZero />}
           </div>
           {streaming !== null ? (
             <pre className="msg-content">{streaming || '生成中…'}</pre>
