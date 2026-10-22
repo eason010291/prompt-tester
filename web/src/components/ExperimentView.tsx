@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router'
 import { api } from '../api'
 import { formatCost, useResource } from '../hooks/useResource'
 import { scoreLevel } from '../lib/runs'
+import MetricChips from './MetricChips'
 import ModifyPanel from './ModifyPanel'
 import RetryDialog, { type RetryRequest } from './RetryDialog'
 import RunView from './RunView'
@@ -395,6 +396,13 @@ function StageCard({ d, st, i, runs, judge, active, open, pendingA, onOpen, onCo
   }
 
   const scores = done.map((r) => r.score).filter((v): v is number => v != null)
+  // 本階段指標合計（以已完成分支的回覆數為分母）
+  const stageMetrics = done.length
+    ? {
+        totals: Object.fromEntries((d.metric_defs ?? []).map((m) => [m.id, done.reduce((a, r) => a + (r.metrics?.[m.id] ?? 0), 0)])),
+        replies: done.reduce((a, r) => a + r.replies, 0),
+      }
+    : null
   const avg = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null
   const scenarios = [...new Set(runs.map((r) => r.scenario_id))]
   const nextBranches = next ? (mode === 'restart' ? d.scenario_ids.length : sel.size) * next.seeds * Math.max(1, next.temperatures.length) : 0
@@ -428,6 +436,7 @@ function StageCard({ d, st, i, runs, judge, active, open, pendingA, onOpen, onCo
               </span>
             </>
           )}
+          {stageMetrics && <> · <MetricChips defs={d.metric_defs} values={stageMetrics.totals} replies={stageMetrics.replies} showZero /></>}
           {!isLast && ` · 結束後：${PROMOTE_LABEL[mode]}${mode === 'top_k' || mode === 'llm_assist' ? `（K = ${st.promote.k}）` : ''}`}
         </span>
       </div>
@@ -487,6 +496,7 @@ function StageCard({ d, st, i, runs, judge, active, open, pendingA, onOpen, onCo
                           </span>
                         )}
                         {jp && <span className={`chip judge-chip ${jp.pick ? 'is-pick' : ''}`}>評審 #{jp.rank}</span>}
+                        <MetricChips defs={d.metric_defs} values={r.metrics} replies={r.replies || undefined} />
                       </span>
                       <span className="branch-excerpt">{r.error ?? (r.excerpt || (r.status === 'queued' ? '排隊中…' : r.status === 'running' ? '生成中…' : ''))}</span>
                       {jp?.reason && <span className="branch-reason">評審：{jp.reason}</span>}

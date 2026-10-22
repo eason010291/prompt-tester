@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from .. import feedback as fb
-from .. import store, vcs
+from .. import metrics, store, vcs
 from ..preset import Preset
 from .deps import get_db
 
@@ -91,6 +91,7 @@ def compare_runs(a: int, b: int, conn: sqlite3.Connection = Depends(get_db)) -> 
             raise HTTPException(404, f"找不到試跑 #{rid}")
         run["feedback"] = fb.list_for(conn, run_id=rid)
         run["scores"] = fb.aggregate(run["feedback"])
+        run["metrics"] = metrics.run_metrics(run["messages"], metrics.load(conn))
         runs[key] = run
     hashes = [runs[k]["preset_hash"] for k in ("a", "b")]
     pa, pb = (_snapshot(conn, h) for h in hashes)
@@ -98,6 +99,7 @@ def compare_runs(a: int, b: int, conn: sqlite3.Connection = Depends(get_db)) -> 
     runs["a"]["preset"], runs["b"]["preset"] = pa, pb
     return {
         **runs,
+        "metric_defs": metrics.describe(metrics.load(conn)),
         "same_preset": hashes[0] == hashes[1],
         "diff": vcs.diff_presets(pa, pb) if pa and pb else None,
     }

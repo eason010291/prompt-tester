@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
-from . import experiments, feedback, store, vcs, workspace
+from . import experiments, feedback, metrics, store, vcs, workspace
 from .preset import POSITION_IN_CHAT, Block, Preset
 from .routes.prompt import build_for, get_workspace, resolve_scenario
 
@@ -404,6 +404,12 @@ def get_feedback(ctx: Ctx, a: GetFeedback) -> dict:
         items = feedback.list_for(conn, run_id=a.run_id)
     else:
         items = feedback.list_for(conn)[-30:]
+    defs = metrics.load(conn)
+    names = {m.id: m.name for m in defs}
+
+    def measured(text: str) -> dict:
+        return {names[k]: v for k, v in metrics.measure(text, defs).items()}
+
     out = []
     for f in items:
         entry: dict = {"feedback_id": f["id"], "scores": f["scores"], "text": f["text"]}
@@ -411,7 +417,7 @@ def get_feedback(ctx: Ctx, a: GetFeedback) -> dict:
             m = conn.execute("SELECT id, run_id, turn, role, content FROM run_messages WHERE id = ?", (f["target_id"],)).fetchone()
             if m:
                 entry |= {"target": f"回覆 message_id={m['id']}（試跑 #{m['run_id']} 第 {m['turn']} 回合）",
-                          "reply": _clip(m["content"], a.reply_chars)}
+                          "reply": _clip(m["content"], a.reply_chars), "reply_metrics": measured(m["content"])}
         elif f["target_type"] == "run":
             m = conn.execute(
                 "SELECT id, turn, content FROM run_messages WHERE run_id = ? AND role = 'assistant' ORDER BY idx DESC LIMIT 1",
@@ -421,6 +427,7 @@ def get_feedback(ctx: Ctx, a: GetFeedback) -> dict:
             if m:
                 entry["last_reply"] = _clip(m["content"], a.reply_chars)
                 entry["last_reply_message_id"] = m["id"]
+                entry["last_reply_metrics"] = measured(m["content"])
         else:
             entry["target"] = f"單次生成 #{f['target_id']}"
         out.append(entry)

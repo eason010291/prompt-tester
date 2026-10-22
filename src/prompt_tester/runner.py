@@ -177,12 +177,15 @@ _TAG = re.compile(r"<[^>]+>")
 MAX_TRANSCRIPT_CHARS = 2000
 
 
-def strip_markup(text: str) -> str:
+def strip_markup(text: str, limit: int | None = MAX_TRANSCRIPT_CHARS) -> str:
+    """去掉思考鏈、狀態欄等 HTML / 程式碼區塊，只留劇情文字；limit 為 None 時不截斷。"""
     text = _COMMENT.sub("", _CODE.sub("", _BLOCKS.sub("", text)))
     text = _TAG.sub("", text)
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
-    return text[:MAX_TRANSCRIPT_CHARS] + ("…" if len(text) > MAX_TRANSCRIPT_CHARS else "")
+    if limit is None or len(text) <= limit:
+        return text
+    return text[:limit] + "…"
 
 
 def user_sim_messages(

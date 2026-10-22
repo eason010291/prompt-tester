@@ -17,6 +17,7 @@ import httpx
 from pydantic import BaseModel
 
 from . import feedback, providers, store, vcs
+from . import metrics as metrics_mod
 from .entities import Connection, ReasoningEffort, Scenario
 from .preset import HistoryMessage, Preset
 from .runner import CallResult, RunSpec, UserSimSettings, request_body, run_session, scripted_turns, stream_call
@@ -152,17 +153,19 @@ def detail(conn: sqlite3.Connection, exp_id: int) -> dict | None:
         return None
     runs = sorted(store.list_runs(conn, limit=10_000, experiment_id=exp_id), key=lambda r: r["id"])
     scores = feedback.overall_by_run(conn)
-    last = {
-        r["run_id"]: r["content"]
-        for r in conn.execute(
-            """SELECT m.run_id, m.content FROM run_messages m JOIN runs r ON r.id = m.run_id
-               WHERE r.experiment_id = ? AND m.role = 'assistant' ORDER BY m.idx""",
-            (exp_id,),
-        )
-    }
+    defs = metrics_mod.load(conn)
+    replies: dict[int, list[dict]] = {}
+    for m in conn.execute(
+        """SELECT m.id, m.run_id, m.role, m.content, m.error FROM run_messages m JOIN runs r ON r.id = m.run_id
+           WHERE r.experiment_id = ? AND m.role = 'assistant' ORDER BY m.idx""",
+        (exp_id,),
+    ):
+        replies.setdefault(m["run_id"], []).append(dict(m))
     for r in runs:
+        mine = replies.get(r["id"], [])
         r["score"] = scores.get(r["id"])
-        r["excerpt"] = _excerpt(last.get(r["id"], ""))
+        r["excerpt"] = _excerpt(mine[-1]["content"] if mine else "")
+        r["metrics"] = metrics_mod.run_metrics(mine, defs)["totals"]
         r["counterpart"] = None
     if exp["rerun_of"]:
         origin_keys = pair_keys(store.list_runs(conn, limit=10_000, experiment_id=exp["rerun_of"]))
@@ -175,6 +178,7 @@ def detail(conn: sqlite3.Connection, exp_id: int) -> dict | None:
             r["id"] for r in store.list_runs(conn, limit=10_000, experiment_id=exp["rerun_of"]) if r["promoted"]
         ]
     exp["runs"] = runs
+    exp["metric_defs"] = metrics_mod.describe(defs)
     exp["cost"] = sum(r["cost"] or 0 for r in runs) + (exp["state"].get("judge_cost") or 0)
     exp["scenarios"] = {
         sid: s.get("name", "") for sid, s in exp["state"].get("scenarios", {}).items()
@@ -913,7 +917,11 @@ def diff_workspace(conn: sqlite3.Connection, exp_id: int, preset: Preset) -> dic
 
 
 def list_probes(conn: sqlite3.Connection, run_id: int, turn: int) -> list[dict]:
-    return [dict(r) for r in conn.execute("SELECT * FROM probes WHERE run_id = ? AND turn = ? ORDER BY id DESC", (run_id, turn))]
+    defs = metrics_mod.load(conn)
+    rows = [dict(r) for r in conn.execute("SELECT * FROM probes WHERE run_id = ? AND turn = ? ORDER BY id DESC", (run_id, turn))]
+    for r in rows:
+        r["metrics"] = metrics_mod.measure(r["content"], defs)
+    return rows
 
 
 async def probe(conn: sqlite3.Connection, http: httpx.AsyncClient, exp_id: int, run_id: int, turn: int, preset: Preset,

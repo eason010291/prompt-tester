@@ -5,7 +5,7 @@ import { scoreLevel, withDepth } from '../lib/runs'
 import { formatCost, useResource } from '../hooks/useResource'
 import { collectScriptSets } from '../lib/st/scripts'
 import { makeMacro } from '../lib/st/regex'
-import { SOURCE_LABEL, formatScore, shortId, type ComparedRun, type Preset, type Run, type RunCompare, type RunMessage } from '../types'
+import { SOURCE_LABEL, formatScore, shortId, type ComparedRun, type MetricDef, type Preset, type Run, type RunCompare, type RunMessage } from '../types'
 
 const StMessage = lazy(() => import('./StMessage'))
 
@@ -64,7 +64,7 @@ export default function RunCompare({ a, b, onFeedback }: { a: number; b: number;
         </p>
       )}
 
-      <ScoreTable sides={sides} />
+      <ScoreTable sides={sides} metricDefs={data.metric_defs} />
 
       <div className="compare-grid">
         {sides.map((s) => (
@@ -115,10 +115,28 @@ function RunHead({ label, run, blind }: { label: string; run: ComparedRun; blind
   )
 }
 
-function ScoreTable({ sides }: { sides: { label: string; run: ComparedRun }[] }) {
+function ScoreTable({ sides, metricDefs }: { sides: { label: string; run: ComparedRun }[]; metricDefs?: MetricDef[] }) {
   const names = [...new Set(sides.flatMap((s) => Object.keys(s.run.scores.attributes)))]
-  if (!names.length) return <p className="muted small">還沒有分數。在下方評語寫「屬性：7/10」這樣的行就會統計。</p>
   const [x, y] = sides
+  const metricRow = (m: MetricDef) => {
+    const vx = x.run.metrics?.per_reply[m.id] ?? null
+    const vy = y.run.metrics?.per_reply[m.id] ?? null
+    const delta = vx != null && vy != null ? Math.round((vy - vx) * 100) / 100 : null
+    const better = delta != null && delta !== 0 && (m.direction === 'lower' ? delta < 0 : delta > 0)
+    return (
+      <tr key={`m:${m.id}`}>
+        <td>
+          {m.name} <span className="muted small">（每則平均，自動）</span>
+        </td>
+        <td>{vx ?? '—'}</td>
+        <td>{vy ?? '—'}</td>
+        <td className={delta == null || delta === 0 ? 'muted' : better ? 'delta-up' : 'delta-down'}>
+          {delta == null ? '—' : `${delta > 0 ? '+' : ''}${delta}`}
+        </td>
+      </tr>
+    )
+  }
+  if (!names.length && !metricDefs?.length) return <p className="muted small">還沒有分數。在下方評語寫「屬性：7/10」這樣的行就會統計。</p>
   const row = (name: string, vx: number | null | undefined, vy: number | null | undefined, strong = false) => {
     const delta = vx != null && vy != null ? vy - vx : null
     return (
@@ -154,7 +172,8 @@ function ScoreTable({ sides }: { sides: { label: string; run: ComparedRun }[] })
       </thead>
       <tbody>
         {names.map((n) => row(n, x.run.scores.attributes[n], y.run.scores.attributes[n]))}
-        {row('整體平均', x.run.scores.overall, y.run.scores.overall, true)}
+        {names.length > 0 && row('整體平均', x.run.scores.overall, y.run.scores.overall, true)}
+        {metricDefs?.map(metricRow)}
       </tbody>
     </table>
   )

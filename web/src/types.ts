@@ -538,6 +538,8 @@ export interface Run
   extends Omit<RunSummary, 'scenario_name' | 'connection_name' | 'user_connection_name' | 'replies' | 'score' | 'last_turn'> {
   scenario: Scenario
   messages: RunMessage[]
+  metrics?: RunMetrics
+  metric_defs?: MetricDef[]
 }
 
 export type RunEvent =
@@ -577,6 +579,7 @@ export interface RunCompare {
   b: ComparedRun
   same_preset: boolean
   diff: PresetDiff | null
+  metric_defs?: MetricDef[]
 }
 
 export const formatScore = (v: number | null | undefined) => (v == null ? '—' : Number.isInteger(v) ? String(v) : v.toFixed(1))
@@ -645,6 +648,8 @@ export interface ExpRun extends RunSummary {
   experiment_id: number
   stage: number
   excerpt: string
+  /** 自動指標：本分支所有角色回覆的合計 */
+  metrics?: Record<string, number>
   counterpart: number | null
 }
 
@@ -679,6 +684,7 @@ export interface ExperimentDetail {
   cost: number
   scenarios: Record<string, string>
   origin_promoted?: number[]
+  metric_defs?: MetricDef[]
 }
 
 export const PROMOTE_LABEL: Record<PromoteMode, string> = {
@@ -785,6 +791,7 @@ export interface Probe {
   served_by: string | null
   finish_reason: string | null
   error: string | null
+  metrics?: Record<string, number>
 }
 
 export interface WorkspaceDiff {
@@ -792,4 +799,21 @@ export interface WorkspaceDiff {
   diff: PresetDiff
   experiment_commit: string | null
   preset_name: string
+}
+
+// ---- 自動指標（簡版） ----
+
+export interface MetricDef {
+  id: string
+  name: string
+  direction: 'lower' | 'higher'
+  warn_at: number | null
+}
+
+export interface RunMetrics {
+  /** 訊息 id → 各指標次數 */
+  messages: Record<string, Record<string, number>>
+  totals: Record<string, number>
+  per_reply: Record<string, number | null>
+  replies: number
 }
