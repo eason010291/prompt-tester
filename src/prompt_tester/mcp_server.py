@@ -17,9 +17,11 @@ from starlette.responses import JSONResponse
 from . import __version__, agent_tools as at
 
 INSTRUCTIONS = (
-    "Prompt Tester：SillyTavern 提示詞（預設）測試器。工具只能操作工作區（網頁「提示詞」頁正在編輯的預設）。"
-    "典型流程：get_feedback 讀評語 → list_blocks / get_block 讀預設 → patch_block 等修改 → diff_workspace 檢查 → commit。"
-    "提交時若在受保護的 main 分支上，會自動建立 agent/<時間> 分支。run_experiment 會產生 LLM 費用，需使用者在設定中開啟。"
+    "Prompt Tester：SillyTavern 提示詞（預設）與角色卡的測試器。一個網頁分頁一支工具：prompt（提示詞）、scenario（情境 / 角色卡）、"
+    "experiment（實驗與評語）、script（腳本）、versions（版本）；每支工具用 action 指定動作，欄位用 path 定位。"
+    "典型流程：experiment feedback 讀評語 → prompt read 讀預設（或 scenario read 讀角色卡）→ patch / set 修改 → diff 檢查 → commit。"
+    "預設提交時若在受保護的 main 分支上，會自動建立 agent/<時間> 分支；情境的修改存成線性版本，可在網頁上 diff 與還原。"
+    "experiment run 會產生 LLM 費用，需使用者在設定中開啟。"
 )
 
 
@@ -53,9 +55,9 @@ def build(app: FastAPI, token_getter: Callable[[], str]) -> StreamableHTTPSessio
     async def list_tools(ctx, params) -> types.ListToolsResult:
         settings = at.load_settings(app.state.db)
         return types.ListToolsResult(tools=[
-            types.Tool(name=t.name, description=t.description, inputSchema=t.schema())
+            types.Tool(name=t.name, description=t.description(actions), inputSchema=t.schema(actions))
             for t in at.REGISTRY.values()
-            if not t.gate or getattr(settings, t.gate)
+            if (actions := t.enabled(settings))
         ])
 
     async def call_tool(ctx, params: types.CallToolRequestParams) -> types.CallToolResult:

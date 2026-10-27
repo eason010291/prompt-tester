@@ -13,30 +13,35 @@ const STATUS_LABEL: Record<AgentRound['status'], string> = {
 }
 
 const TOOL_LABEL: Record<string, string> = {
-  list_blocks: '列出區塊',
-  get_block: '讀取區塊',
-  edit_block: '改寫區塊',
-  patch_block: '局部修改',
-  add_block: '新增區塊',
-  remove_block: '刪除區塊',
-  move_block: '移動區塊',
-  toggle_block: '開關區塊',
-  set_params: '改參數',
+  prompt: '預設',
+  scenario: '情境',
+  experiment: '實驗',
+  script: '腳本',
+  versions: '版本',
+}
+
+const ACTION_LABEL: Record<string, string> = {
+  read: '讀取',
+  set: '設定',
+  patch: '局部修改',
+  add: '新增',
+  remove: '刪除',
+  move: '移動',
   preview: '預覽組裝',
-  diff_workspace: '檢查差異',
+  diff: '檢查差異',
   commit: '提交',
-  get_feedback: '讀評語',
-  get_reply: '讀回覆',
-  list_scenarios: '列出情境',
-  get_card: '讀取角色卡',
-  get_lore_entry: '讀取世界書條目',
-  edit_card_field: '改寫角色卡欄位',
-  patch_card_field: '局部修改角色卡',
-  patch_lore_entry: '局部修改世界書',
-  edit_lore_entry: '改寫世界書條目',
-  toggle_lore_entry: '開關世界書條目',
-  diff_card: '檢查角色卡差異',
-  commit_card: '存成角色卡版本',
+  list: '列出',
+  revisions: '版本紀錄',
+  feedback: '讀評語',
+  reply: '讀回覆',
+  run: '執行實驗',
+  log: '提交紀錄',
+}
+
+function callLabel(name: string, args: unknown): string {
+  const action = args && typeof args === 'object' ? (args as Record<string, unknown>).action : undefined
+  const tool = TOOL_LABEL[name] ?? name
+  return typeof action === 'string' ? `${tool}・${ACTION_LABEL[action] ?? action}` : tool
 }
 
 /**
@@ -106,7 +111,7 @@ export default function ModifyPanel({
           </>
         ) : (
           <>
-            只改角色卡（描述、個性、範例對話、世界書…{settings.data?.allow_opening ? '、開場白' : ''}），不改測試條件；修改前自動存一版，完成後存成新版本。修改期間請不要編輯這個情境。
+            可改角色卡的所有欄位、世界書、開場白{settings.data?.allow_fixtures ? '與測試條件（改了會標示，之後的實驗不能和之前直接比較）' : '（測試條件不開放）'}；修改前自動存一版，完成後存成新版本，可在情境頁 diff 與還原。修改期間請不要編輯這個情境。
           </>
         )}
       </p>
@@ -250,7 +255,7 @@ function RoundView({ id, onChanged }: { id: number; onChanged: () => void }) {
             {s.calls.map((c, i) => (
               <details key={i} className={`call ${c.ok ? '' : 'is-error'}`}>
                 <summary>
-                  {c.ok ? '✓' : '✗'} {TOOL_LABEL[c.name] ?? c.name} <code>{c.name}</code> {summarizeArgs(c.args)}
+                  {c.ok ? '✓' : '✗'} {callLabel(c.name, c.args)} {summarizeArgs(c.args)}
                 </summary>
                 <pre>{JSON.stringify(c.args, null, 2)}</pre>
                 <pre className="call-result">{c.result}</pre>
@@ -293,9 +298,11 @@ function summarizeArgs(args: unknown): string {
   if (!args || typeof args !== 'object') return ''
   const a = args as Record<string, unknown>
   if (typeof a.message === 'string') return `「${a.message.slice(0, 40)}」`
-  if (typeof a.name === 'string') return `「${a.name}」`
-  if (typeof a.find === 'string') return `「${a.find.slice(0, 20)}…」`
-  if (typeof a.id === 'string') return a.id.slice(0, 8)
+  const path = typeof a.path === 'string' ? a.path.replace(/\[([0-9a-f]{8})[0-9a-f-]{20,}\]/g, '[$1]') : ''
+  if (typeof a.find === 'string') return `${path} 「${a.find.slice(0, 20)}…」`
+  if (path) return path
+  if (a.value && typeof a.value === 'object' && typeof (a.value as Record<string, unknown>).name === 'string')
+    return `「${(a.value as Record<string, unknown>).name}」`
   if (typeof a.experiment_id === 'number') return `實驗 #${a.experiment_id}`
   return ''
 }

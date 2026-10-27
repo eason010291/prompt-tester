@@ -730,8 +730,8 @@ function ModifierForm({ initial, connections, onSaved }: { initial: AgentSetting
           允許外部 agent 執行實驗（會產生 LLM 費用）
         </label>
         <label className="check">
-          <input type="checkbox" checked={s.allow_opening} onChange={(e) => set({ allow_opening: e.target.checked })} />
-          修改角色卡時允許改開場白（改了會失去與舊實驗的對照）
+          <input type="checkbox" checked={s.allow_fixtures} onChange={(e) => set({ allow_fixtures: e.target.checked })} />
+          允許修改情境的測試條件（既有歷史、使用者輸入、人設、目標；改了會在版本紀錄標示，之後的實驗不能和之前直接比較）
         </label>
       </div>
       <label className="stack">
@@ -766,12 +766,14 @@ function ModifierForm({ initial, connections, onSaved }: { initial: AgentSetting
 
 function AgentAccessCard() {
   const base = `${window.location.protocol}//${window.location.host}`
-  const tools = useResource<{ name: string; description: string; builtin: boolean; enabled: boolean }[]>('/agent/tools')
+  const tools = useResource<
+    { name: string; summary: string; enabled: boolean; actions: { name: string; doc: string; builtin: boolean; enabled: boolean }[] }[]
+  >('/agent/tools')
   return (
     <section className="card">
       <h2>外部 agent 接入（MCP / REST）</h2>
       <p className="muted small">
-        用你自己的 agent（Claude Code、Claude Desktop、Cursor…）對話式修改預設，與網頁內建的修改迴圈共用同一組工具與限制：只能改工作區，提交到 main 時會自動改建 <code>agent/…</code> 分支。只接受本機連線；要開放給區網請在 config.local.toml 設定 <code>[agent] token</code>。
+        用你自己的 agent（Claude Code、Claude Desktop、Cursor…）對話式修改預設與角色卡，與網頁內建的修改迴圈共用同一組工具與限制：一個分頁一支工具，用 <code>action</code> 指定動作、<code>path</code> 定位欄位；預設只能改工作區，提交到 main 時會自動改建 <code>agent/…</code> 分支；情境的修改存成版本，可 diff 與還原。只接受本機連線；要開放給區網請在 config.local.toml 設定 <code>[agent] token</code>。
       </p>
       <dl className="access-list">
         <dt>MCP（streamable HTTP）</dt>
@@ -786,7 +788,7 @@ function AgentAccessCard() {
         </dd>
         <dt>REST</dt>
         <dd>
-          <code>POST {base}/api/agent/tools/&lt;工具名稱&gt;</code>（JSON 參數；可帶 <code>X-Agent-Name</code> 標頭作為作者名稱）· <a href="/docs#/agent%20tools" target="_blank" rel="noreferrer">OpenAPI 文件</a>
+          <code>POST {base}/api/agent/tools/&lt;工具名稱&gt;</code>（JSON 參數，含 <code>action</code>；可帶 <code>X-Agent-Name</code> 標頭作為作者名稱）· <a href="/docs#/agent%20tools" target="_blank" rel="noreferrer">OpenAPI 文件</a>
         </dd>
       </dl>
       {tools.data && (
@@ -794,10 +796,17 @@ function AgentAccessCard() {
           <summary className="small">工具清單（{tools.data.length}）</summary>
           <ul className="tool-list">
             {tools.data.map((t) => (
-              <li key={t.name} className={t.enabled ? '' : 'muted'}>
-                <code>{t.name}</code> {t.description}
-                {!t.builtin && <em>（只給外部 agent）</em>}
-                {!t.enabled && <em>（未開啟）</em>}
+              <li key={t.name}>
+                <code>{t.name}</code> {t.summary}
+                <ul>
+                  {t.actions.map((a) => (
+                    <li key={a.name} className={a.enabled ? '' : 'muted'}>
+                      <code>{a.name}</code> {a.doc}
+                      {!a.builtin && <em>（只給外部 agent）</em>}
+                      {!a.enabled && <em>（未開啟）</em>}
+                    </li>
+                  ))}
+                </ul>
               </li>
             ))}
           </ul>

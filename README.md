@@ -62,17 +62,17 @@ cd web && npm run dev                      # http://localhost:5173
 
 ## 外部 agent 接入（MCP / REST）
 
-修改預設的工具（讀評語、讀 / 改區塊、預覽、提交…）同時以三種方式提供，規則相同：只能改工作區，提交到受保護的 main 時會自動改建 `agent/…` 分支。
+修改預設與角色卡的工具同時以三種方式提供，規則相同。一個分頁一支工具：`prompt`（提示詞）、`scenario`（情境 / 角色卡）、`experiment`（實驗與評語）、`script`（腳本）、`versions`（版本），以 `action` 指定動作、`path` 定位欄位（例如 `blocks[<id>].content`、`card.description`、`lore[3].keys`）。預設只能改工作區，提交到受保護的 main 時會自動改建 `agent/…` 分支；情境的修改存成線性版本，可在情境頁 diff 與還原。
 
 ```sh
 # Claude Code（伺服器需在執行中）
 claude mcp add --transport http prompt-tester http://127.0.0.1:8000/mcp
 # 只支援 stdio 的客戶端（轉發到執行中的伺服器）
 uv run --directory <專案資料夾> python -m prompt_tester.mcp_stdio   # 環境變數 PROMPT_TESTER_URL
-# REST：POST /api/agent/tools/<工具名稱>，文件見 http://127.0.0.1:8000/docs
+# REST：POST /api/agent/tools/<工具名稱>（body 含 action），文件見 http://127.0.0.1:8000/docs
 ```
 
-預設只接受本機連線。要開放給區網，在 `config.local.toml` 加上 `[agent]` 區段的 `token = "..."`，客戶端以 `Authorization: Bearer <token>` 或 `X-Agent-Token` 標頭帶入。會產生費用的 `run_experiment` 需在設定頁開啟。
+預設只接受本機連線。要開放給區網，在 `config.local.toml` 加上 `[agent]` 區段的 `token = "..."`，客戶端以 `Authorization: Bearer <token>` 或 `X-Agent-Token` 標頭帶入。會產生費用的 `experiment` 的 `run` 需在設定頁開啟。
 
 ## 測試
 
@@ -98,7 +98,7 @@ cd web && npm run lint && npm run build
 | `src/prompt_tester/scripts.py`、`experiments.py` | 腳本繼承樹、金字塔實驗 |
 | `src/prompt_tester/feedback.py`、`metrics.py` | 評語與分數、自動指標 |
 | `src/prompt_tester/scenario_revisions.py` | 情境（角色卡）的版本紀錄與 diff |
-| `src/prompt_tester/agent_tools.py`、`modifier.py` | LLM 修改工具與內建迴圈 |
+| `src/prompt_tester/agent_tools.py`、`doc_paths.py`、`modifier.py` | LLM 修改工具（一個分頁一支、路徑定位）與內建迴圈 |
 | `src/prompt_tester/mcp_server.py`、`mcp_stdio.py` | MCP 接口 |
 | `src/prompt_tester/routes/` | API 路由 |
 | `web/` | React + Vite 前端（`lib/st/` 為 ST 正則與訊息渲染的移植） |

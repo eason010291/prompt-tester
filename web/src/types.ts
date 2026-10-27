@@ -715,7 +715,8 @@ export interface AgentSettings {
   budget_usd: number
   allow_params: boolean
   allow_run_experiment: boolean
-  allow_opening: boolean
+  /** 允許 LLM 修改情境的測試條件（歷史、使用者輸入、人設、目標、變數） */
+  allow_fixtures: boolean
 }
 
 export interface AgentCall {

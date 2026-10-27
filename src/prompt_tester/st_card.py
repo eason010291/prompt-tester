@@ -89,6 +89,9 @@ def parse_card(raw: dict) -> tuple[CharacterCard, list[str]]:
         system_prompt=data.get("system_prompt") or "",
         post_history_instructions=data.get("post_history_instructions") or "",
         alternate_greetings=[g for g in data.get("alternate_greetings") or [] if isinstance(g, str)],
+        tags=[t for t in data.get("tags") or [] if isinstance(t, str)],
+        creator=str(data.get("creator") or ""),
+        character_version=str(data.get("character_version") or ""),
         depth_prompt=DepthPrompt(
             prompt=dp.get("prompt") or "",
             depth=int(dp.get("depth", 4)),
@@ -203,7 +206,7 @@ def export_card(scenario, spec: str = "chara_card_v3") -> dict:
     opening = scenario.opening
     first_mes = card.first_mes if (opening == card.first_mes or opening in card.alternate_greetings) else opening
     name = card.name or scenario.char
-    tags = data.get("tags") if isinstance(data.get("tags"), list) else []
+    tags = card.tags
 
     ext.update({
         "talkativeness": ext.get("talkativeness", 0.5),
@@ -224,8 +227,8 @@ def export_card(scenario, spec: str = "chara_card_v3") -> dict:
         "system_prompt": card.system_prompt,
         "post_history_instructions": card.post_history_instructions,
         "tags": tags,
-        "creator": data.get("creator", ""),
-        "character_version": data.get("character_version", ""),
+        "creator": card.creator,
+        "character_version": card.character_version,
         "alternate_greetings": card.alternate_greetings,
         "extensions": ext,
     })

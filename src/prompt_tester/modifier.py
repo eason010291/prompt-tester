@@ -59,23 +59,30 @@ def _update(conn: sqlite3.Connection, rid: int, **fields) -> None:
         conn.execute(f"UPDATE agent_rounds SET {cols} WHERE id = ?", (*vals, rid))
 
 
-CARD_TARGET_NOTE = """【這一輪的修改對象：角色卡】
-這一輪只修改情境 #{sid} 的角色卡（描述、個性、卡片情境、範例對話、system prompt、post-history、深度提示、世界書條目{opening}），預設不能改。
-既有歷史、逐回合使用者輸入、使用者人設與目標是測試條件，不能修改。改完後呼叫 commit_card（不是 commit）。"""
+CARD_TARGET_NOTE = """【這一輪的修改對象：情境 #{sid}】
+這一輪用 scenario 工具修改情境 #{sid}（scenario_id 可省略）：角色卡的所有欄位、世界書條目（可新增、刪除）、開場白{fixtures}。
+預設不能改（prompt 只能 read / preview）。改完後呼叫 scenario 的 commit；每次提交都是一個新版本，使用者可以 diff 與還原。"""
+
+FIXTURE_NOTE = """
+測試條件（既有歷史、逐回合使用者輸入、使用者人設與目標、變數）也可以改，但改了之後實驗結果就不能和之前直接比較；除非使用者要求或評語明確指向測試條件，否則不要動。"""
 
 
 def initial_message(ctx: at.Ctx, instructions: str, experiment_id: int | None, target: str = "preset") -> str:
     what = "角色卡" if target == "card" else "預設"
     parts = [f"【使用者的要求】\n{instructions.strip() or f'依下方評語改善{what}。'}"]
     if target == "card":
-        parts.append(CARD_TARGET_NOTE.format(sid=ctx.scenario_id, opening="、開場白" if ctx.settings.allow_opening else ""))
-        parts.append("【目前的角色卡（get_card）】\n" + at.to_text(at.call(ctx, "get_card", {"scenario_id": ctx.scenario_id}), 30000))
+        allow = ctx.settings.allow_fixtures
+        parts.append(CARD_TARGET_NOTE.format(sid=ctx.scenario_id, fixtures="、測試條件" if allow else "（測試條件不開放修改）")
+                     + (FIXTURE_NOTE if allow else ""))
+        parts.append("【目前的情境（scenario read）】\n"
+                     + at.to_text(at.call(ctx, "scenario", {"action": "read", "scenario_id": ctx.scenario_id}), 30000))
     else:
-        parts.append("【目前的預設（list_blocks）】\n" + at.to_text(at.call(ctx, "list_blocks", {}), 12000))
+        parts.append("【目前的預設（prompt read）】\n" + at.to_text(at.call(ctx, "prompt", {"action": "read"}), 12000))
     if experiment_id is not None:
-        fb = at.call(ctx, "get_feedback", {"experiment_id": experiment_id})
-        parts.append(f"【實驗 #{experiment_id} 的評語（get_feedback）】\n" + at.to_text(fb, 40000))
-    parts.append("請開始：必要時讀取全文，修改後呼叫 commit_card。" if target == "card" else "請開始：必要時讀取區塊全文，修改後呼叫 commit。")
+        fb = at.call(ctx, "experiment", {"action": "feedback", "experiment_id": experiment_id})
+        parts.append(f"【實驗 #{experiment_id} 的評語（experiment feedback）】\n" + at.to_text(fb, 40000))
+    parts.append("請開始：必要時用 read 讀全文，修改後呼叫 scenario 的 commit。" if target == "card"
+                 else "請開始：必要時用 read 讀區塊全文，修改後呼叫 prompt 的 commit。")
     return "\n\n".join(parts)
 
 
@@ -164,8 +171,8 @@ class Manager:
                      meta={"round_id": rid, "experiment_id": rnd["experiment_id"], "model": connection.model},
                      branch_prefix="llm", scenario_id=rnd["scenario_id"])
         target = rnd["target"]
-        names = at.builtin_names(settings, target)
-        tools = at.openai_tools(names)
+        ctx.allowed = at.builtin_allowed(settings, target)
+        tools = at.openai_tools(ctx.allowed, settings)
         steps: list[dict] = []
         cost, n_calls = 0.0, 0
         status, error, final = "done", None, None
@@ -216,8 +223,6 @@ class Manager:
                         args = raw
                     if n_calls > settings.max_tool_calls:
                         ok, result = False, f"已達工具呼叫上限（{settings.max_tool_calls}），請立刻 commit 或結束"
-                    elif name not in names:
-                        ok, result = False, f"這個迴圈不能使用工具 {name}"
                     else:
                         try:
                             ok, result = True, at.call(ctx, name, args)
@@ -238,7 +243,7 @@ class Manager:
                     final = entry["text"]
                     status = "uncommitted" if ctx.changed else "done"
                     if not ctx.changed:
-                        error = "模型沒有修改任何區塊就結束了"
+                        error = "模型沒有做任何修改就結束了"
                     break
                 if cost > settings.budget_usd:
                     status, error = "error", f"花費 ${cost:.4f} 超過上限 ${settings.budget_usd}"
