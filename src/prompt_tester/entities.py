@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .preset import HistoryMessage
 
@@ -72,11 +72,26 @@ class CharacterCard(BaseModel):
     system_prompt: str = ""
     post_history_instructions: str = ""
     alternate_greetings: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    creator: str = ""
+    character_version: str = ""
     depth_prompt: DepthPrompt = Field(default_factory=DepthPrompt)
     regex_scripts: list[dict] = Field(default_factory=list)
     book: Lorebook | None = None
     # 原始角色卡 JSON，供匯出時保留未知欄位
     raw: dict = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_raw(cls, data):
+        # 舊資料沒有 tags / creator / character_version 欄位：從原始卡片補上
+        if isinstance(data, dict) and isinstance(data.get("raw"), dict):
+            raw = data["raw"]
+            src = raw.get("data") if isinstance(raw.get("data"), dict) else raw
+            for key, ok in (("tags", list), ("creator", str), ("character_version", str)):
+                if key not in data and isinstance(src.get(key), ok):
+                    data = {**data, key: src[key]}
+        return data
 
 
 class Scenario(BaseModel):

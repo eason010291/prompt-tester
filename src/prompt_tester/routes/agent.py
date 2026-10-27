@@ -1,4 +1,4 @@
-"""修改者 LLM：設定、內建迴圈（每一輪的紀錄）、③ REST 工具（每個工具一個 endpoint，出現在 OpenAPI）。
+"""修改者 LLM：設定、內建迴圈（每一輪的紀錄）、③ REST 工具（每支工具一個 endpoint，以 action 區分動作，出現在 OpenAPI）。
 
 工具 endpoint 與 /mcp 共用存取檢查：沒設定 [agent] token 時只接受本機連線。
 """
@@ -106,11 +106,16 @@ def check_access(request: Request) -> None:
 @router.get("/tools", dependencies=[Depends(check_access)])
 def list_tools(conn: sqlite3.Connection = Depends(get_db)) -> list[dict]:
     settings = at.load_settings(conn)
-    return [
-        {"name": t.name, "description": t.description, "input_schema": t.schema(), "builtin": t.builtin,
-         "enabled": not t.gate or getattr(settings, t.gate)}
-        for t in at.REGISTRY.values()
-    ]
+    out = []
+    for t in at.REGISTRY.values():
+        enabled = t.enabled(settings)
+        out.append({
+            "name": t.name, "summary": t.summary, "description": t.description(enabled or list(t.actions)),
+            "input_schema": t.schema(enabled or list(t.actions)), "enabled": bool(enabled),
+            "actions": [{"name": a.name, "doc": a.doc, "builtin": a.builtin, "enabled": a.name in enabled}
+                        for a in t.actions.values()],
+        })
+    return out
 
 
 def _endpoint(t: at.Tool):
@@ -138,5 +143,5 @@ def _endpoint(t: at.Tool):
 
 def register_tools(app: FastAPI) -> None:
     for t in at.REGISTRY.values():
-        app.add_api_route(f"/api/agent/tools/{t.name}", _endpoint(t), methods=["POST"], summary=t.description,
-                          tags=["agent tools"])
+        app.add_api_route(f"/api/agent/tools/{t.name}", _endpoint(t), methods=["POST"], summary=t.summary,
+                          description=t.description(list(t.actions)), tags=["agent tools"])

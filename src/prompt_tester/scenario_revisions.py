@@ -3,7 +3,8 @@
 - 每個情境一條歷史：父 → 子，不分支；需要平行版本時用「複製情境」。
 - 修訂 = 情境內容的完整快照（不含 id / updated_at），以內容 hash 判斷是否有未存成版本的修改。
 - 人工「存成版本」、LLM 修改角色卡後提交、建立實驗時（內容有變）各新增一筆。
-- 欄位分兩類：作品（角色卡內容，LLM 可改）與測試夾具（歷史、使用者輸入、人設、目標…，LLM 不改）。
+- 欄位分兩類：作品（角色卡內容）與測試條件（歷史、使用者輸入、人設、目標…）；LLM 都能改（測試條件可在設定關閉），
+  每次修改都存成新版本，可 diff、可還原。
 """
 
 import hashlib
@@ -13,16 +14,29 @@ import sqlite3
 from . import store
 from .entities import LoreEntry, Scenario
 
-# (路徑, 標籤, 類別)；類別 card = 作品，fixture = 測試夾具，meta = 名稱等
+# (路徑, 標籤, 類別)；類別 card = 作品，fixture = 測試條件，meta = 名稱等；世界書條目另外比對
 FIELDS: list[tuple[str, str, str]] = [
+    ("card.name", "角色名稱", "card"),
     ("card.description", "描述", "card"),
     ("card.personality", "個性", "card"),
     ("card.scenario", "卡片情境", "card"),
+    ("card.first_mes", "卡片開場白（first_mes）", "card"),
+    ("card.alternate_greetings", "替代開場白", "card"),
     ("card.mes_example", "範例對話", "card"),
     ("card.system_prompt", "System prompt", "card"),
     ("card.post_history_instructions", "Post-history", "card"),
     ("card.depth_prompt.prompt", "深度提示", "card"),
+    ("card.depth_prompt.depth", "深度提示深度", "card"),
+    ("card.depth_prompt.role", "深度提示角色", "card"),
     ("card.creator_notes", "作者備註", "card"),
+    ("card.tags", "標籤", "card"),
+    ("card.creator", "作者", "card"),
+    ("card.character_version", "角色版本", "card"),
+    ("card.regex_scripts", "角色正則", "card"),
+    ("card.book.name", "世界書名稱", "card"),
+    ("card.book.scan_depth", "世界書掃描深度", "card"),
+    ("card.book.token_budget", "世界書 token 預算", "card"),
+    ("card.book.recursive_scanning", "世界書遞迴掃描", "card"),
     ("opening", "開場白", "card"),
     ("persona", "使用者人設", "fixture"),
     ("user_goal", "使用者目標", "fixture"),
@@ -35,17 +49,8 @@ FIELDS: list[tuple[str, str, str]] = [
     ("notes", "備註", "meta"),
 ]
 
-# LLM 可以修改的角色卡欄位（工具參數名稱 → 路徑）；開場白另由設定開關
-CARD_FIELDS = {
-    "description": "card.description",
-    "personality": "card.personality",
-    "scenario": "card.scenario",
-    "mes_example": "card.mes_example",
-    "system_prompt": "card.system_prompt",
-    "post_history_instructions": "card.post_history_instructions",
-    "depth_prompt": "card.depth_prompt.prompt",
-}
-OPENING_FIELD = ("opening", "opening")
+# 測試條件的頂層欄位（LLM 修改受「允許修改測試條件」設定控制）
+FIXTURE_FIELDS = {path for path, _l, group in FIELDS if group == "fixture"}
 
 
 def _content(sc: Scenario) -> dict:
@@ -63,14 +68,6 @@ def get_path(sc: Scenario, path: str):
             return None
         cur = getattr(cur, part)
     return cur
-
-
-def set_path(sc: Scenario, path: str, value) -> None:
-    parts = path.split(".")
-    cur = sc
-    for part in parts[:-1]:
-        cur = getattr(cur, part)
-    setattr(cur, parts[-1], value)
 
 
 def _row(r, with_data: bool = False) -> dict:
@@ -150,7 +147,8 @@ def _text(v) -> str:
     if isinstance(v, str):
         return v
     if isinstance(v, list):
-        return "\n".join(x if isinstance(x, str) else f"{x.role}：{x.content}" for x in v)
+        return "\n".join(x if isinstance(x, str) else f"{x.role}：{x.content}" if hasattr(x, "role")
+                         else json.dumps(x, ensure_ascii=False) for x in v)
     if isinstance(v, dict):
         return "\n".join(f"{k} = {val}" for k, val in v.items())
     return str(v)

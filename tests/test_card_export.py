@@ -151,3 +151,12 @@ def test_png_roundtrip(c):
 
     manual = c.post("/api/scenarios", json={"name": "無卡"}).json()
     assert c.get(f"/api/scenarios/{manual['id']}/export").status_code == 422
+
+
+def test_legacy_card_fields_from_raw():
+    # 舊資料的 card 沒有 tags / creator / character_version：從原始卡片補上
+    from prompt_tester.entities import CharacterCard
+
+    card = CharacterCard.model_validate({"name": "露", "raw": RAW})
+    assert card.tags == ["原創", "成人"] and card.creator == "聿" and card.character_version == "1.2"
+    assert CharacterCard.model_validate({"tags": [], "raw": RAW}).tags == []

@@ -71,34 +71,89 @@ def test_revisions_api(env):
         assert c.get(f"/api/scenarios/{sid}/diff?a={r1['id']}&b={r2['id']}").json()["fields"]
 
 
-def test_card_tools(env):
+def test_scenario_tool_all_fields(env):
     with client(env) as c:
         sid = new_scenario(c)["id"]
-        tool = lambda n, a, **h: c.post(f"/api/agent/tools/{n}", json=a, headers=h)  # noqa: E731
-        card = tool("get_card", {"scenario_id": sid}).json()["result"]
-        assert card["fields"]["description"].startswith("露是") and "opening" not in card["fields"]
-        assert [x["uid"] for x in card["lore"]] == [1, 2] and card["unsaved_changes"] is True
 
-        assert tool("patch_card_field", {"scenario_id": sid, "field": "description", "find": "，說話常用比喻", "replace": ""}).status_code == 200
-        r = tool("patch_card_field", {"scenario_id": sid, "field": "opening", "find": "你來了", "replace": "來啦"})
-        assert r.status_code == 422 and "開場白不開放" in r.json()["detail"]
-        assert tool("patch_card_field", {"scenario_id": sid, "field": "persona", "find": "a", "replace": "b"}).status_code == 422
-        assert tool("patch_lore_entry", {"scenario_id": sid, "uid": 1, "find": "堆滿畫布", "replace": "有一扇天窗"}).status_code == 200
-        assert tool("toggle_lore_entry", {"scenario_id": sid, "uid": 2, "enabled": False}).json()["result"]["enabled"] is False
-        assert tool("get_lore_entry", {"scenario_id": sid, "uid": 9}).status_code == 422
+        def t(action, args=None, sc=sid, **h):
+            return c.post("/api/agent/tools/scenario", json={"action": action, "scenario_id": sc, **(args or {})}, headers=h)
 
-        # 開場白開關
-        s = c.get("/api/agent/settings").json()
-        c.put("/api/agent/settings", json=s | {"allow_opening": True})
-        assert tool("patch_card_field", {"scenario_id": sid, "field": "opening", "find": "你來了", "replace": "來啦"}).status_code == 200
+        card = t("read").json()["result"]
+        assert card["card"]["description"].startswith("露是") and card["opening"] == "（露抬頭）你來了。"
+        assert [x["uid"] for x in card["book"]["entries"]] == [1, 2] and card["unsaved_changes"] is True
+        assert card["fixtures"]["user_turns"] == ["嗨"] and card["fixtures"]["editable"] is True
+        assert "raw" not in card["card"]
 
-        done = tool("commit_card", {"scenario_id": sid, "message": "去掉比喻設定"}, **{"X-Agent-Name": "cc"}).json()["result"]
+        # 角色卡所有欄位、開場白、世界書（含新增 / 刪除）
+        assert t("patch", {"path": "card.description", "find": "，說話常用比喻", "replace": ""}).status_code == 200
+        assert t("patch", {"path": "opening", "find": "你來了", "replace": "來啦"}).status_code == 200
+        assert t("patch", {"path": "lore[1].content", "find": "堆滿畫布", "replace": "有一扇天窗"}).status_code == 200
+        assert t("set", {"path": "lore[2].enabled", "value": False}).json()["result"]["new"] is False
+        assert t("set", {"path": "lore[2].position", "value": 4}).status_code == 200
+        assert "0～7" in t("set", {"path": "lore[2].position", "value": 9}).json()["detail"]
+        assert t("set", {"path": "card.depth_prompt.depth", "value": 2}).status_code == 200
+        assert t("set", {"path": "card.tags", "value": ["原創"]}).status_code == 200
+        assert t("set", {"path": "card.name", "value": "小露"}).status_code == 200
+        assert t("add", {"path": "card.alternate_greetings", "value": "（露在睡覺）"}).json()["result"]["index"] == 0
+        added = t("add", {"path": "lore", "value": {"comment": "雷", "keys": ["雷"], "content": "露怕打雷。"}}).json()["result"]
+        assert added["uid"] == 3
+        assert t("remove", {"path": "lore[1]"}).json()["result"]["removed"] == "工作室"
+        assert t("read", {"path": "lore[9]"}).status_code == 422
+        assert t("read", {"path": "lore[3].keys"}).json()["result"] == ["雷"]
+        assert "不能修改" in t("set", {"path": "lore[2].uid", "value": 7}).json()["detail"]
+        assert "不能修改" in t("set", {"path": "card.raw", "value": {}}).json()["detail"]
+        assert "沒有欄位" in t("set", {"path": "card.descripton", "value": "x"}).json()["detail"]
+        assert "不合法" in t("set", {"path": "card.depth_prompt.role", "value": "narrator"}).json()["detail"]
+        assert "不是文字" in t("patch", {"path": "card.tags", "find": "原", "replace": "x"}).json()["detail"]
+
+        done = t("commit", {"message": "去掉比喻設定"}, **{"X-Agent-Name": "cc"}).json()["result"]
         rev = c.get(f"/api/scenarios/{sid}/revisions/{done['revision']}").json()
         assert rev["author"] == "agent:cc" and rev["data"]["card"]["description"] == "露是二十五歲的插畫家。"
-        assert rev["data"]["opening"] == "（露抬頭）來啦。"
-        assert tool("commit_card", {"scenario_id": sid, "message": "x"}).status_code == 422  # 沒有變更
+        assert rev["data"]["opening"] == "（露抬頭）來啦。" and rev["data"]["card"]["book"]["entries"][-1]["content"] == "露怕打雷。"
+        assert "note" not in done
+        assert t("set", {"path": "card.regex_scripts", "value": [{"scriptName": "狀態欄", "findRegex": "/x/g"}]}).status_code == 200
+        assert t("set", {"path": "card.regex_scripts[0].disabled", "value": True}).status_code == 200  # 正則是自由物件，可加鍵
+        d = t("diff").json()["result"]
+        assert [f["label"] for f in d["fields"]] == ["角色正則"] and not d["fixture_changed"]
+        assert t("commit", {"message": "加正則"}).status_code == 200
+        assert t("commit", {"message": "x"}).status_code == 422  # 沒有變更
+        exported = c.get(f"/api/scenarios/{sid}/export").json()
+        assert exported["data"]["tags"] == ["原創"] and exported["name"] == "小露"
+        assert exported["data"]["extensions"]["depth_prompt"]["depth"] == 2
+
+        # 測試條件（預設開放）：提交時標示
+        assert t("set", {"path": "user_turns[0]", "value": "晚安"}).status_code == 200
+        assert t("set", {"path": "vars.城市", "value": "台北"}).status_code == 200
+        assert t("remove", {"path": "vars.城市"}).status_code == 200
+        assert t("set", {"path": "persona", "value": "夜班護理師"}).status_code == 200
+        d = t("diff").json()["result"]
+        assert d["fixture_changed"] and {f["path"] for f in d["fields"]} == {"user_turns", "persona"}
+        done = t("commit", {"message": "改成夜班情境"}).json()["result"]
+        assert "不能和之前直接比較" in done["note"]
+        rev = c.get(f"/api/scenarios/{sid}/revisions/{done['revision']}").json()
+        assert rev["message"].startswith("【測試條件變更】") and rev["meta"]["fixture_changed"] is True
+        assert [r["number"] for r in t("revisions").json()["result"]] == [3, 2, 1]
+
+        s = c.get("/api/agent/settings").json()
+        c.put("/api/agent/settings", json=s | {"allow_fixtures": False})
+        assert "測試條件不開放" in t("set", {"path": "history", "value": []}).json()["detail"]
+        assert t("read").json()["result"]["fixtures"]["editable"] is False
+
+        # 手動建立的情境：沒有角色卡，但測試條件可讀
         manual = c.post("/api/scenarios", json={"name": "無卡"}).json()["id"]
-        assert "沒有角色卡" in tool("get_card", {"scenario_id": manual}).json()["detail"]
+        assert t("read", sc=manual).json()["result"]["card"] is None
+        assert "沒有角色卡" in t("set", {"path": "card.description", "value": "x"}, sc=manual).json()["detail"]
+        assert {sid, manual} <= {x["id"] for x in t("list").json()["result"]}
+
+
+def test_add_lore_creates_book(env):
+    with client(env) as c:
+        sc = c.post("/api/scenarios", json={"name": "空書", "card": {"name": "阿木", "description": "木匠"}}).json()
+        r = c.post("/api/agent/tools/scenario", json={"action": "add", "scenario_id": sc["id"], "path": "lore",
+                                                       "value": {"comment": "工坊", "keys": ["工坊"], "content": "在河邊。"}})
+        assert r.json()["result"]["uid"] == 0
+        book = c.get(f"/api/scenarios/{sc['id']}").json()["card"]["book"]
+        assert book["name"] == "阿木" and book["entries"][0]["content"] == "在河邊。"
 
 
 def completion(content="", calls=None):
@@ -126,7 +181,9 @@ def test_builtin_loop_card_target_and_probe(env):
         if body.get("stream") is False:
             names = {t["function"]["name"] for t in body["tools"]}
             # 改角色卡的一輪：只有角色卡與唯讀工具
-            assert "patch_card_field" in names and "patch_block" not in names and "commit" not in names
+            assert names == {"scenario", "prompt", "experiment"}
+            enums = {t["function"]["name"]: t["function"]["parameters"]["properties"]["action"]["enum"] for t in body["tools"]}
+            assert {"set", "patch", "add", "remove", "commit"} <= set(enums["scenario"]) and enums["prompt"] == ["read", "preview"]
             step = state["plan"].pop(0)
             return 200, json.dumps(step(body) if callable(step) else step, ensure_ascii=False).encode()
         text = "【新卡】回覆" if "沉默寡言" in json.dumps(body["messages"], ensure_ascii=False) else "回覆"
@@ -153,10 +210,10 @@ def test_builtin_loop_card_target_and_probe(env):
         state["plan"] = [
             lambda body: (
                 assert_card_context(body),
-                completion("", [("patch_card_field", {"scenario_id": other, "field": "personality", "find": "溫柔", "replace": "x"}),
-                                ("patch_card_field", {"scenario_id": sid, "field": "personality", "find": "溫柔、慢熱", "replace": "沉默寡言"})]),
+                completion("", [("scenario", {"action": "patch", "scenario_id": other, "path": "card.personality", "find": "溫柔", "replace": "x"}),
+                                ("scenario", {"action": "patch", "path": "card.personality", "find": "溫柔、慢熱", "replace": "沉默寡言"})]),
             )[1],
-            completion("", [("commit_card", {"scenario_id": sid, "message": "個性改為沉默寡言，減少比喻"})]),
+            completion("", [("scenario", {"action": "commit", "message": "個性改為沉默寡言，減少比喻"})]),
         ]
         r = c.post("/api/agent/rounds", json={"experiment_id": exp["id"], "target": "card", "scenario_id": sid, "auto_rerun": True}).json()
         assert r["target"] == "card" and r["base_revision"] == rev0 and r["branch"] is None
@@ -184,7 +241,7 @@ def test_builtin_loop_card_target_and_probe(env):
         assert new_run["messages"][-1]["content"].startswith("【新卡】")
 
         # 捨棄：沒提交的角色卡修改還原到基準版本
-        state["plan"] = [completion("", [("patch_card_field", {"scenario_id": sid, "field": "description", "find": "插畫家", "replace": "作家"})]),
+        state["plan"] = [completion("", [("scenario", {"action": "patch", "scenario_id": sid, "path": "card.description", "find": "插畫家", "replace": "作家"})]),
                          completion("改好了")]
         r2 = c.post("/api/agent/rounds", json={"instructions": "改職業", "target": "card", "scenario_id": sid}).json()
         d2 = wait(c, f"/api/agent/rounds/{r2['id']}")
@@ -196,4 +253,5 @@ def test_builtin_loop_card_target_and_probe(env):
 
 def assert_card_context(body):
     first = body["messages"][1]["content"]
-    assert "這一輪的修改對象：角色卡" in first and "【目前的角色卡（get_card）】" in first and "比喻太多" in first
+    assert "這一輪的修改對象：情境" in first and "【目前的情境（scenario read）】" in first and "比喻太多" in first
+    assert "測試條件（既有歷史" in first
